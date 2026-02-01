@@ -119,6 +119,38 @@ export LOKI_HOST=<control-plane-ip>
 docker-compose --profile auditing up -d
 ```
 
+### 3. SSH Access to Agents (Optional)
+
+For interactive SSH access to isolated agent containers, the system uses [FRP (Fast Reverse Proxy)](https://github.com/fatedier/frp) to establish secure tunnels without requiring inbound ports on the data plane.
+
+```
+User SSH → Control Plane:6000-6099 → frps → frpc → Agent:22
+           (tunnel ports)                         (data plane)
+```
+
+**Control Plane** (already configured in docker-compose.yml):
+- FRP server listens on port 7000 (control) and exposes ports 6000-6099 for SSH tunnels
+- Dashboard available at port 7500
+
+**Data Plane** setup:
+```bash
+# Add to data-plane/.env
+FRP_SERVER_ADDR=<control-plane-ip>
+FRP_AUTH_TOKEN=<token>              # Must match control plane
+FRP_REMOTE_PORT=6000                # Unique per agent (6000, 6001, ...)
+SSH_AUTHORIZED_KEYS="ssh-rsa AAAA... user@host"
+
+# Start with SSH profile
+docker-compose --profile ssh up -d
+```
+
+**Connect**:
+```bash
+ssh -p 6000 agent@<control-plane-ip>
+```
+
+See [control-plane/README.md](control-plane/README.md#ssh-access-to-agents) and [data-plane/README.md](data-plane/README.md#ssh-access-via-frp) for detailed configuration.
+
 ## Features
 
 | Feature | Description |
@@ -134,6 +166,7 @@ docker-compose --profile auditing up -d
 | **Secret Management** | Encrypted secrets in Postgres (Fernet/AES) |
 | **Rate Limiting** | Per-domain rate limits to control API usage |
 | **Audit Logs** | Full audit trail of all actions |
+| **SSH Access** | Secure SSH tunnels to agents via FRP (no inbound ports on data plane) |
 
 ## Directory Structure
 
@@ -142,7 +175,8 @@ docker-compose --profile auditing up -d
 ├── control-plane/
 │   ├── docker-compose.yml      # Control plane services
 │   ├── configs/
-│   │   └── grafana/            # Grafana dashboards
+│   │   ├── grafana/            # Grafana dashboards
+│   │   └── frps/               # FRP server config (SSH tunnels)
 │   └── services/
 │       ├── control-plane/      # Control plane API (secrets, allowlist, audit)
 │       └── admin-ui/           # React admin console
@@ -152,7 +186,8 @@ docker-compose --profile auditing up -d
     ├── configs/
     │   ├── coredns/            # DNS allowlist
     │   ├── envoy/              # Proxy + credential injection (Lua filter)
-    │   └── fluent-bit/         # Log forwarding
+    │   ├── fluent-bit/         # Log forwarding
+    │   └── frpc/               # FRP client config (SSH tunnels)
     ├── services/
     │   └── agent-manager/      # Manages agent container lifecycle
     └── tests/                  # Unit and E2E tests

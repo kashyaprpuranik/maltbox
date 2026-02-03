@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, RefreshCw, RotateCcw, Trash2, ExternalLink } from 'lucide-react';
+import { Plus, RefreshCw, RotateCcw, Trash2 } from 'lucide-react';
 import { Card, Table, Button, Modal, Input, Select, Badge } from '../components/common';
 import {
   useSecrets,
@@ -181,15 +181,6 @@ export function Secrets() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-dark-100">Secrets</h1>
         <div className="flex items-center gap-2">
-          <a
-            href="/grafana/d/vault-secrets"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1 text-sm text-dark-400 hover:text-dark-200"
-          >
-            <ExternalLink size={14} />
-            Grafana Metrics
-          </a>
           <Button variant="secondary" onClick={() => refetch()}>
             <RefreshCw size={16} className="mr-2" />
             Refresh

@@ -46,6 +46,11 @@ services:
     image: agent:${AGENT_VARIANT:-lean}
     container_name: agent
 
+    # Container runtime: "runc" (default) or "runsc" (gVisor)
+    # gVisor provides kernel-level isolation - agent syscalls never reach host kernel
+    # Install gVisor: https://gvisor.dev/docs/user_guide/install/
+    runtime: ${CONTAINER_RUNTIME:-runc}
+
     # Security hardening (relaxed for SSH - runs as root to start sshd, then drops to user)
     security_opt:
       - no-new-privileges:true
@@ -173,36 +178,49 @@ services:
       retries: 3
 
   # ===========================================================================
-  # Fluent Bit - Log Aggregation & Forwarding directly to Loki
-  # Pushes to Loki directly (not via control plane) for better performance
+  # Vector - Log Collection & Forwarding to ClickHouse
+  # Collects Docker logs, gVisor audit logs, agent app logs
   # Optional: Only runs with --profile auditing
   # ===========================================================================
-  fluent-bit:
-    image: fluent/fluent-bit:2.2
-    container_name: fluent-bit
+  vector:
+    image: timberio/vector:0.36.0-alpine
+    container_name: vector
     profiles:
       - auditing
 
     volumes:
-      - ./configs/fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
-      - ./configs/fluent-bit/parsers.conf:/fluent-bit/etc/parsers.conf:ro
+      - ./configs/vector/vector.yaml:/etc/vector/vector.yaml:ro
       - agent-logs:/var/log/agent:ro
-      # Docker container logs (Envoy stdout + agent stdout/stderr)
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - vector-data:/var/lib/vector
+      - vector-backup:/var/log/vector
+      # Docker socket for container log collection
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # gVisor logs (requires runsc --debug-log=/var/log/runsc/)
+      - /var/log/runsc:/var/log/runsc:ro
 
     environment:
-      # Push logs directly to Loki (not via control plane API)
-      # LOKI_HOST must be set - control plane may be on a different machine
-      - LOKI_HOST=${LOKI_HOST}
-      - LOKI_PORT=${LOKI_PORT:-3100}
+      # OpenObserve connection (control plane)
+      - OPENOBSERVE_HOST=${OPENOBSERVE_HOST}
+      - OPENOBSERVE_PORT=${OPENOBSERVE_PORT:-5080}
+      - OPENOBSERVE_USER=${OPENOBSERVE_USER:-admin@maltbox.local}
+      - OPENOBSERVE_PASSWORD=${OPENOBSERVE_PASSWORD:-admin}
+      # Metadata
+      - AGENT_ID=${AGENT_ID:-default}
       - ENVIRONMENT=${ENVIRONMENT:-development}
 
-    # Only on infra-net - can reach external services
+    command: ["--config", "/etc/vector/vector.yaml"]
+
+    # Only on infra-net - can reach control plane
     networks:
       - infra-net
 
     restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "vector", "top", "--interval", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   # ===========================================================================
   # Agent Manager - Container lifecycle management (wipe, restart, status)
@@ -287,6 +305,7 @@ networks:
   agent-net:
     driver: bridge
     internal: true  # No external connectivity
+    enable_ipv6: false  # Prevent IPv6 bypass of egress controls
     ipam:
       config:
         - subnet: 172.30.0.0/16
@@ -294,6 +313,7 @@ networks:
   # Infrastructure network - can reach control plane
   infra-net:
     driver: bridge
+    enable_ipv6: false  # Prevent IPv6 bypass of egress controls
     ipam:
       config:
         - subnet: 172.31.0.0/16
@@ -305,3 +325,5 @@ volumes:
   agent-logs:
   agent-workspace:
   coredns-config:
+  vector-data:
+  vector-backup:

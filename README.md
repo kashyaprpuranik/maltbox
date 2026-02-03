@@ -10,8 +10,8 @@ Secure development environment for AI agents with isolated networking and centra
 │                           (runs on provider/cloud)                               │
 │                                                                                  │
 │  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────────┐ │
-│  │ Postgres  │  │ Admin UI  │  │   Loki    │  │  Grafana  │  │  FRP Server   │ │
-│  │ (secrets) │  │  (:9080)  │  │  (:3100)  │  │  (:3000)  │  │ (:7000,:6000+)│ │
+│  │ Postgres  │  │ Admin UI  │  │OpenObserve│  │  Grafana  │  │  FRP Server   │ │
+│  │ (secrets) │  │  (:9080)  │  │  (:5080)  │  │  (:3000)  │  │ (:7000,:6000+)│ │
 │  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └───────┬───────┘ │
 │        │              │              │              │                 │         │
 │        ▼              ▼              │              │                 │         │
@@ -33,7 +33,7 @@ Secure development environment for AI agents with isolated networking and centra
 │                 │     (runs on client)│              │                 │         │
 │                 │                     │              │                 ▼         │
 │  ┌──────────────┴───────────┐  ┌──────┴───────┐            ┌─────────────────┐  │
-│  │      Agent Manager       │  │  Fluent-Bit  │────────┘   │   FRP Client    │  │
+│  │      Agent Manager       │  │    Vector    │────────┘   │   FRP Client    │  │
 │  │  (polls CP, syncs DNS)   │  │   (logs)     │            │ (connects to CP)│  │
 │  └──────────────────────────┘  └──────────────┘            └────────┬────────┘  │
 │                                                                      │          │
@@ -61,12 +61,13 @@ Secure development environment for AI agents with isolated networking and centra
 
 ### Network Isolation
 - **agent-net**: Internal network, no external access. Agent can only reach Envoy and CoreDNS.
-- **infra-net**: Can reach external services. Used by Envoy (credentials), Fluent-Bit (logs → Loki), and Agent Manager (polls CP).
+- **infra-net**: Can reach external services. Used by Envoy (credentials), Vector (logs → OpenObserve), and Agent Manager (polls CP).
+- **IPv6 disabled**: Prevents bypass of IPv4 egress controls.
 
 ### Polling Architecture (No Inbound Ports)
 - Data plane has **no inbound ports** - control plane cannot initiate connections
 - Agent Manager polls control plane every 30s for commands (wipe, restart, stop, start)
-- Fluent-Bit pushes logs directly to Loki (not through CP API)
+- Vector pushes logs directly to OpenObserve (not through CP API)
 - Allowlist synced from CP to CoreDNS every 5 minutes
 
 ### Agent Container Hardening
@@ -76,6 +77,7 @@ Secure development environment for AI agents with isolated networking and centra
 - Resource limits (CPU, memory, pids)
 - DNS forced through CoreDNS filter
 - All HTTP(S) traffic forced through Envoy proxy
+- Optional [gVisor](https://gvisor.dev) kernel isolation (`CONTAINER_RUNTIME=runsc`)
 
 ### Credential Security
 - Secrets encrypted with Fernet (AES) and stored in Postgres
@@ -115,7 +117,7 @@ export CONTROL_PLANE_TOKEN=dev-token  # Must match API_TOKENS in control plane
 export AGENT_ID=my-agent-01           # Optional: unique ID (default: "default")
 docker-compose up -d
 
-# With log shipping to Loki:
+# With log shipping to OpenObserve:
 export LOKI_HOST=<control-plane-ip>
 docker-compose --profile auditing up -d
 ```
@@ -163,11 +165,13 @@ See [control-plane/README.md](control-plane/README.md#ssh-access-to-agents) and 
 | **Egress Proxy** | All HTTP(S) traffic routed through Envoy with logging |
 | **Credential Injection** | API keys injected by proxy, never exposed to agent |
 | **Domain Aliases** | Use `*.devbox.local` shortcuts (e.g., `openai.devbox.local`) |
-| **Centralized Logging** | All agent activity logged to Loki |
+| **Centralized Logging** | All agent activity logged to OpenObserve (Vector collector) |
 | **Secret Management** | Encrypted secrets in Postgres (Fernet/AES) |
 | **Rate Limiting** | Per-domain rate limits to control API usage |
 | **Audit Logs** | Full audit trail of all actions |
 | **SSH Access** | Secure SSH tunnels to agents via FRP (no inbound ports on data plane) |
+| **gVisor Isolation** | Optional kernel-level syscall isolation (`CONTAINER_RUNTIME=runsc`) |
+| **IPv6 Disabled** | Prevents bypass of IPv4 egress controls |
 
 ## Directory Structure
 
@@ -184,10 +188,12 @@ See [control-plane/README.md](control-plane/README.md#ssh-access-to-agents) and 
 │
 └── data-plane/
     ├── docker-compose.yml          # Data plane services
+    ├── run.sh                      # Launcher (--gvisor, --ssh, --auditing)
     ├── configs/
     │   ├── coredns/            # DNS allowlist
     │   ├── envoy/              # Proxy + credential injection (Lua filter)
-    │   ├── fluent-bit/         # Log forwarding
+    │   ├── vector/             # Log collection & forwarding
+    │   ├── gvisor/             # gVisor runtime config
     │   └── frpc/               # FRP client config (SSH tunnels)
     ├── services/
     │   └── agent-manager/      # Manages agent container lifecycle
@@ -483,19 +489,27 @@ docker-compose up -d
 pytest tests/test_e2e.py -v
 ```
 
-## TODO
+## Roadmap
 
-- [ ] Move audit logs from Postgres to Loki (reduce DB load, leverage retention policies)
-- [x] Add rate limiting to CP API endpoints (prevent audit log blowup from DoS)
-- [ ] TLS between data plane and control plane
-- [ ] mTLS for DP→CP communication
+### Completed
 - [x] Multi-data plane support (multiple agents per control plane)
 - [x] Allowlist sync from control plane to CoreDNS
 - [x] Agent registration (approve/reject new agents, revoke access)
 - [x] API token management (generate, delete, enable/disable tokens via UI)
 - [x] Per-agent configuration (different allowlists/secrets/rate-limits per agent)
 - [x] Multi-tenancy (isolated tenant workspaces)
-- [ ] Package registry proxy/allowlist
+- [x] Rate limiting on CP API (slowapi + Redis)
+- [x] Centralized logging (Vector → OpenObserve)
+- [x] gVisor kernel isolation (optional, `CONTAINER_RUNTIME=runsc`)
+- [x] IPv6 disabled (prevent egress control bypass)
+- [x] SSH access via FRP tunnels
+
+### Planned
+- [ ] TLS between data plane and control plane
+- [ ] mTLS for DP→CP communication (step-ca)
+- [ ] Package registry proxy/allowlist (npm, pip, cargo)
+- [ ] Web terminal in Admin UI (xterm.js via SSH)
+- [ ] Alert rules for security events (gVisor syscall denials, rate limit hits)
 
 ## License
 

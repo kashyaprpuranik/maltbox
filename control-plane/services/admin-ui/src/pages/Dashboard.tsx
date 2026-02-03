@@ -19,6 +19,7 @@ import {
   ShieldOff,
 } from 'lucide-react';
 import { Card, Badge, Button, Modal } from '../components/common';
+import { useAuth } from '../contexts/AuthContext';
 import {
   useHealth,
   useDataPlanes,
@@ -33,6 +34,7 @@ import {
 } from '../hooks/useApi';
 
 export function Dashboard() {
+  const { user } = useAuth();
   const { data: health } = useHealth();
   const { data: dataPlanes, refetch: refetchDataPlanes } = useDataPlanes();
 
@@ -517,18 +519,20 @@ export function Dashboard() {
             </div>
             <ArrowRight size={16} className="text-dark-500" />
           </Link>
-          <a
-            href="/grafana/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center justify-between p-3 rounded-lg bg-dark-900/50 hover:bg-dark-700 transition-colors"
-          >
-            <div className="flex items-center gap-3">
-              <Activity size={20} className="text-dark-400" />
-              <span className="text-dark-200">Open Grafana</span>
-            </div>
-            <ArrowRight size={16} className="text-dark-500" />
-          </a>
+          {user?.is_super_admin && (
+            <a
+              href="/grafana/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-between p-3 rounded-lg bg-dark-900/50 hover:bg-dark-700 transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <Activity size={20} className="text-dark-400" />
+                <span className="text-dark-200">Open Grafana</span>
+              </div>
+              <ArrowRight size={16} className="text-dark-500" />
+            </a>
+          )}
         </div>
       </Card>
 

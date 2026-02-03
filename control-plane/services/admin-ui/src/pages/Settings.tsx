@@ -2,9 +2,11 @@ import { useState } from 'react';
 import { Eye, EyeOff, Save, ExternalLink } from 'lucide-react';
 import { Card, Button, Input } from '../components/common';
 import { useHealth } from '../hooks/useApi';
+import { useAuth } from '../contexts/AuthContext';
 import { api } from '../api/client';
 
 export function Settings() {
+  const { user } = useAuth();
   const { data: health } = useHealth();
   const [showToken, setShowToken] = useState(false);
   const [token, setToken] = useState(api.getToken() || '');
@@ -93,23 +95,25 @@ export function Settings() {
           </div>
         </Card>
 
-        {/* External Links */}
-        <Card title="External Services">
-          <div className="space-y-2">
-            <a
-              href="/grafana/"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center justify-between p-3 rounded-lg bg-dark-900/50 hover:bg-dark-700 transition-colors"
-            >
-              <div>
-                <p className="text-dark-200">Grafana</p>
-                <p className="text-dark-500 text-sm">Metrics and dashboards</p>
-              </div>
-              <ExternalLink size={16} className="text-dark-500" />
-            </a>
-          </div>
-        </Card>
+        {/* External Links - Super Admin Only */}
+        {user?.is_super_admin && (
+          <Card title="External Services">
+            <div className="space-y-2">
+              <a
+                href="/grafana/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-between p-3 rounded-lg bg-dark-900/50 hover:bg-dark-700 transition-colors"
+              >
+                <div>
+                  <p className="text-dark-200">Grafana</p>
+                  <p className="text-dark-500 text-sm">Metrics and dashboards</p>
+                </div>
+                <ExternalLink size={16} className="text-dark-500" />
+              </a>
+            </div>
+          </Card>
+        )}
 
         {/* About */}
         <Card title="About">

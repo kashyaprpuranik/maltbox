@@ -1,0 +1,39 @@
+# =============================================================================
+# gVisor (runsc) Configuration
+# =============================================================================
+# Install this config to enable security audit logging:
+#   sudo mkdir -p /etc/docker/runsc
+#   sudo cp configs/gvisor/runsc.toml /etc/docker/runsc/
+#   sudo mkdir -p /var/log/runsc && sudo chmod 755 /var/log/runsc
+#   sudo systemctl restart docker
+#
+# Then in /etc/docker/daemon.json, reference this config:
+#   {
+#     "runtimes": {
+#       "runsc": {
+#         "path": "/usr/bin/runsc",
+#         "runtimeArgs": ["--config=/etc/docker/runsc/runsc.toml"]
+#       }
+#     }
+#   }
+# =============================================================================
+
+# Debug logging - captures syscall traces and sandbox events
+debug = true
+debug-log = "/var/log/runsc/"
+
+# Strace logging - detailed syscall tracing (use for debugging, disable for perf)
+# strace = true
+# strace-syscalls = ""  # empty = all syscalls, or comma-separated list
+
+# Network configuration
+network = "sandbox"
+
+# File access configuration
+overlay = true
+
+# Platform (ptrace for compatibility, kvm for performance if available)
+platform = "ptrace"
+
+# Watchdog action on sandbox issues
+watchdog-action = "log"

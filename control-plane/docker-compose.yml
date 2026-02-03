@@ -36,6 +36,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://aidevbox:aidevbox@postgres:5432/control_plane
       - REDIS_URL=redis://redis:6379
+      - OPENOBSERVE_URL=http://openobserve:5080
       - API_TOKENS=${API_TOKENS:-dev-token,admin-token}
       # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
@@ -87,25 +88,35 @@ services:
       retries: 3
 
   # ===========================================================================
-  # Loki - Log Storage (receives logs from data plane fluent-bit)
+  # OpenObserve - Unified Log Storage & UI
+  # Receives logs from data plane Vector, provides built-in search UI
   # ===========================================================================
-  loki:
-    image: grafana/loki:2.9.0
-    container_name: loki
+  openobserve:
+    image: public.ecr.aws/zinclabs/openobserve:latest
+    container_name: openobserve
+
+    environment:
+      - ZO_ROOT_USER_EMAIL=${OPENOBSERVE_USER:-admin@maltbox.local}
+      - ZO_ROOT_USER_PASSWORD=${OPENOBSERVE_PASSWORD:-admin}
+      - ZO_DATA_DIR=/data
 
     volumes:
-      - loki-data:/loki
+      - openobserve-data:/data
 
-    command: -config.file=/etc/loki/local-config.yaml
-
-    # Exposed for data plane fluent-bit to push logs directly
+    # Exposed for data plane Vector to push logs + built-in UI
     ports:
-      - "3100:3100"
+      - "5080:5080"   # HTTP API + UI
 
     networks:
       - control-net
 
     restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   # ===========================================================================
   # Grafana - Dashboards
@@ -133,7 +144,7 @@ services:
       - control-net
 
     depends_on:
-      - loki
+      - openobserve
 
     restart: unless-stopped
 
@@ -174,7 +185,9 @@ services:
     ports:
       - "7000:7000"       # FRP control port (agents connect here)
       - "7500:7500"       # FRP dashboard
-      - "6000-6099:6000-6099"  # SSH tunnel ports (up to 100 agents)
+      # SSH tunnel ports - add more as needed (one per agent)
+      # For many agents, consider using STCP mode instead
+      - "6000-6009:6000-6009"  # SSH tunnels for up to 10 agents
 
     networks:
       - control-net
@@ -197,5 +210,5 @@ networks:
 volumes:
   postgres-data:
   redis-data:
-  loki-data:
+  openobserve-data:
   grafana-data:

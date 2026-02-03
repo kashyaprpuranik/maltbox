@@ -13,10 +13,11 @@ webServer.port = 7500
 webServer.user = "admin"
 webServer.password = "{{ .Envs.FRP_DASHBOARD_PASSWORD }}"
 
-# Port range for dynamic SSH tunnels (one per agent)
-# Each agent gets a unique port: 6000 + hash(agent_id) % 1000
+# Port range for SSH tunnels (one per agent)
+# Default: 10 agents. Expand range in docker-compose.yml if needed.
+# For many agents (50+), consider STCP mode instead.
 allowPorts = [
-  { start = 6000, end = 6999 }
+  { start = 6000, end = 6009 }
 ]
 
 # Logging

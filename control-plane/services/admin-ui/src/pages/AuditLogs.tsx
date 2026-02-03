@@ -96,7 +96,7 @@ export function AuditLogs() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-dark-100">Audit Logs</h1>
+        <h1 className="text-2xl font-bold text-dark-100">Admin Audit Logs</h1>
         <span className="text-dark-500">{total} total entries</span>
       </div>
 

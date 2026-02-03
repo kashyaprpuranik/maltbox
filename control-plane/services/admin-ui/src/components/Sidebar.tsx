@@ -6,9 +6,11 @@ import {
   Shield,
   Gauge,
   FileText,
+  ScrollText,
   Settings,
   Building2,
 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -17,11 +19,14 @@ const navItems = [
   { to: '/rate-limits', icon: Gauge, label: 'Rate Limits' },
   { to: '/tokens', icon: Key, label: 'API Tokens' },
   { to: '/tenants', icon: Building2, label: 'Tenants' },
-  { to: '/audit-logs', icon: FileText, label: 'Audit Logs' },
+  { to: '/admin-logs', icon: FileText, label: 'Admin Logs' },
+  { to: '/agent-logs', icon: ScrollText, label: 'Agent Logs' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 
 export function Sidebar() {
+  const { user } = useAuth();
+
   return (
     <aside className="w-64 bg-dark-900 border-r border-dark-700 flex flex-col">
       <div className="p-4 border-b border-dark-700">
@@ -46,16 +51,18 @@ export function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      <div className="p-4 border-t border-dark-700">
-        <a
-          href="/grafana/"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 text-sm text-dark-500 hover:text-dark-300"
-        >
-          Open Grafana
-        </a>
-      </div>
+      {user?.is_super_admin && (
+        <div className="p-4 border-t border-dark-700">
+          <a
+            href="/grafana/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 text-sm text-dark-500 hover:text-dark-300"
+          >
+            Open Grafana
+          </a>
+        </div>
+      )}
     </aside>
   );
 }

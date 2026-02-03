@@ -5,6 +5,7 @@ import { Secrets } from './pages/Secrets';
 import { Allowlist } from './pages/Allowlist';
 import { RateLimits } from './pages/RateLimits';
 import { AuditLogs } from './pages/AuditLogs';
+import { AgentLogs } from './pages/AgentLogs';
 import { Tokens } from './pages/Tokens';
 import { Tenants } from './pages/Tenants';
 import { Settings } from './pages/Settings';
@@ -25,11 +26,14 @@ function App() {
         <Route path="secrets" element={<Secrets />} />
         <Route path="allowlist" element={<Allowlist />} />
         <Route path="rate-limits" element={<RateLimits />} />
-        <Route path="audit-logs" element={<AuditLogs />} />
+        <Route path="admin-logs" element={<AuditLogs />} />
+        <Route path="agent-logs" element={<AgentLogs />} />
         <Route path="tokens" element={<Tokens />} />
         <Route path="tenants" element={<Tenants />} />
         <Route path="settings" element={<Settings />} />
       </Route>
+      {/* Redirect old route */}
+      <Route path="/audit-logs" element={<Navigate to="/admin-logs" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

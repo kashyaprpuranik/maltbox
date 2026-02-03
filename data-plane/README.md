@@ -23,7 +23,7 @@ The data plane provides a secure, isolated execution environment for AI agents w
 │  ┌─────────────────────────────────────────────────────────┐    │
 │  │                    infra-net                             │    │
 │  │  ┌───────────┐                                          │    │
-│  │  │ Fluent-Bit│ ──────────────────────────► Loki         │    │
+│  │  │  Vector   │ ──────────────────────────► OpenObserve   │    │
 │  │  │  (logs)   │                             (direct)     │    │
 │  │  └───────────┘                                          │    │
 │  └─────────────────────────────────────────────────────────┘    │
@@ -38,7 +38,7 @@ The data plane provides a secure, isolated execution environment for AI agents w
 - **Domain Allowlist**: DNS filtering blocks unapproved domains
 - **Credential Injection**: Automatic API key injection via `*.devbox.local` aliases
 - **Rate Limiting**: Per-domain rate limits with token bucket algorithm
-- **Audit Logging**: All requests logged with optional forwarding to Loki
+- **Audit Logging**: All requests logged with optional forwarding to OpenObserve
 - **Standalone Mode**: Run without control plane using static configuration
 
 ## Control Plane API
@@ -99,12 +99,13 @@ docker-compose up -d
 |----------|---------|-------------|
 | `AGENT_ID` | `default` | Unique identifier for this data plane |
 | `AGENT_VARIANT` | `lean` | Agent image variant: `lean`, `dev`, or `ml` |
+| `CONTAINER_RUNTIME` | `runc` | Container runtime: `runc` (default) or `runsc` (gVisor) |
 | `DATAPLANE_MODE` | `connected` | `standalone` or `connected` |
 | `CONTROL_PLANE_TOKEN` | (none) | API token for control plane auth |
 | `CONTROL_PLANE_URL` | `http://control-plane-api:8000` | Control plane URL |
 | `HEARTBEAT_INTERVAL` | `30` | Seconds between heartbeats to control plane |
-| `LOKI_HOST` | (required for auditing) | Loki host IP/hostname for log shipping |
-| `LOKI_PORT` | `3100` | Loki port |
+| `OPENOBSERVE_HOST` | (required for auditing) | OpenObserve host IP/hostname for log shipping |
+| `OPENOBSERVE_PORT` | `5080` | OpenObserve HTTP port |
 | `STATIC_DOMAIN_MAP` | (none) | Devbox.local domain mappings |
 | `STATIC_CREDENTIALS` | (none) | Static credentials for injection |
 | `STATIC_RATE_LIMITS` | `default:120:20` | Rate limits per domain |
@@ -180,7 +181,7 @@ Requires a running control plane. Features:
 | Domain allowlist | Synced from control plane every 5 min |
 | Domain aliases | Control plane (via secret aliases) |
 | Agent management | Heartbeat polling, remote commands (wipe/restart/stop/start) |
-| Audit logs | Shipped to Loki via fluent-bit |
+| Audit logs | Shipped to OpenObserve via vector |
 | Fallback | Static config used if control plane unavailable |
 
 Configuration: Set `CONTROL_PLANE_URL` and `CONTROL_PLANE_TOKEN` in `.env`
@@ -233,16 +234,33 @@ How `*.devbox.local` aliases work:
 
 ```bash
 # Base services (agent, envoy, dns-filter, agent-manager)
-docker-compose up -d
+docker compose up -d
 
-# With audit logging (adds fluent-bit)
-docker-compose --profile auditing up -d
+# With audit logging (adds vector)
+docker compose --profile auditing up -d
 
 # With SSH access via FRP tunnel
-docker-compose --profile ssh up -d
+docker compose --profile ssh up -d
 
 # With both
-docker-compose --profile auditing --profile ssh up -d
+docker compose --profile auditing --profile ssh up -d
+
+# With gVisor isolation
+CONTAINER_RUNTIME=runsc docker compose up -d
+```
+
+### Wrapper Script
+
+The `run.sh` script provides a convenient interface:
+
+```bash
+./run.sh                      # Standard mode
+./run.sh --gvisor             # With gVisor kernel isolation
+./run.sh --ssh                # With SSH access
+./run.sh --auditing           # With log forwarding
+./run.sh --gvisor --ssh       # Combined options
+./run.sh down                 # Stop all services
+./run.sh logs -f agent        # Follow agent logs
 ```
 
 ## Agent Image Variants
@@ -310,7 +328,7 @@ User SSH → Control Plane:6000 → frps → frpc → Agent:22
 | agent | 22 | agent-net | Isolated execution environment with SSH |
 | envoy-proxy | 8443 | agent-net, infra-net | Egress proxy with credential injection |
 | dns-filter | 53 | agent-net, infra-net | CoreDNS with domain allowlist |
-| fluent-bit | 2020 | infra-net | Log aggregation, pushes to Loki (optional) |
+| vector | - | infra-net | Log collection, pushes to OpenObserve (optional) |
 | agent-manager | - | infra-net | Container lifecycle (polls CP, no inbound port) |
 | frpc | - | agent-net, infra-net | FRP client for SSH tunnel (optional) |
 
@@ -350,7 +368,7 @@ The control plane can manage multiple data planes running on different machines.
 Data Plane 1                            Control Plane
 ┌─────────────┐                        ┌─────────────┐
 │   Envoy     │ ────── :8002 ───────►  │     API     │
-│ fluent-bit  │ ────── :3100 ───────►  │    Loki     │
+│  vector │ ────── :5080 ───────►  │ OpenObserve │
 │agent-manager│ ────── :8002 ───────►  │  (manages)  │
 └─────────────┘   (heartbeat/poll)     │   multiple  │
                                        │   agents    │
@@ -365,7 +383,7 @@ Data Plane 2                           │             │
 AGENT_ID=workstation-1                      # UNIQUE identifier for this data plane
 CONTROL_PLANE_URL=http://192.168.1.50:8002  # Control plane IP
 CONTROL_PLANE_TOKEN=your-token-here
-LOKI_HOST=192.168.1.50                      # For fluent-bit (auditing)
+OPENOBSERVE_HOST=192.168.1.50                      # For vector (auditing)
 ```
 
 Each data plane must have a unique `AGENT_ID` to be managed independently.
@@ -376,13 +394,14 @@ Each data plane must have a unique `AGENT_ID` to be managed independently.
 |------|-----|------|---------|
 | Data plane (Envoy) | Control plane | 8002 | Credential/rate-limit lookups |
 | Data plane (agent-manager) | Control plane | 8002 | Heartbeat polling |
-| Data plane (fluent-bit) | Control plane | 3100 | Log shipping to Loki |
+| Data plane (vector) | Control plane | 5080 | Log shipping to OpenObserve |
 
 No inbound connections to data plane required.
 
 ## Security Controls
 
 - **Network Isolation**: Agent on internal-only network, cannot reach internet directly
+- **IPv6 Disabled**: Prevents bypass of IPv4 egress controls
 - **DNS Filtering**: Only allowlisted domains resolve
 - **No Credential Exposure**: Agent never sees API keys
 - **Rate Limiting**: Prevents runaway API usage
@@ -390,6 +409,38 @@ No inbound connections to data plane required.
 - **Read-only Filesystem**: Agent container has read-only root
 - **Resource Limits**: CPU, memory, and PID limits on agent
 - **No New Privileges**: Security hardening on agent container
+- **gVisor Isolation** (optional): Kernel-level syscall isolation
+
+### gVisor Isolation
+
+For maximum security when running untrusted code, enable [gVisor](https://gvisor.dev) kernel isolation. gVisor intercepts syscalls in userspace - the agent never talks directly to the host kernel, making container escapes extremely difficult.
+
+**Install gVisor:**
+```bash
+# Install runsc
+curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list > /dev/null
+sudo apt-get update && sudo apt-get install -y runsc
+
+# Configure Docker
+sudo runsc install
+sudo systemctl restart docker
+```
+
+**Enable gVisor:**
+```bash
+# Option 1: Environment variable
+CONTAINER_RUNTIME=runsc docker compose up -d
+
+# Option 2: Set in .env
+echo "CONTAINER_RUNTIME=runsc" >> .env
+docker compose up -d
+
+# Option 3: Use wrapper script
+./run.sh --gvisor
+```
+
+**Note:** Only the agent container runs in gVisor. Infrastructure services (Envoy, CoreDNS, etc.) use the standard runc runtime for compatibility and performance.
 
 ## Testing
 
@@ -428,6 +479,7 @@ pytest tests/test_e2e.py -v --run-e2e
 ```
 data-plane/
 ├── docker-compose.yml          # Docker Compose configuration
+├── run.sh                      # Launcher script (--gvisor, --ssh, --auditing)
 ├── agent.Dockerfile            # Agent container image (lean/dev/ml variants)
 ├── agent-entrypoint.sh         # Agent startup script (SSH setup)
 ├── .env.example                # Environment template
@@ -438,9 +490,10 @@ data-plane/
 │   ├── coredns/
 │   │   ├── Corefile            # CoreDNS configuration
 │   │   └── allowlist.hosts     # Allowed domains
-│   ├── fluent-bit/
-│   │   ├── fluent-bit.conf     # Log forwarding config
-│   │   └── parsers.conf        # Log parsers
+│   ├── vector/
+│   │   └── vector.yaml         # Log collection & forwarding config
+│   ├── gvisor/
+│   │   └── runsc.toml          # gVisor runtime config (for debug logging)
 │   └── frpc/
 │       └── frpc.toml           # FRP client configuration
 ├── services/

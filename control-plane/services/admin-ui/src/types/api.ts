@@ -189,3 +189,29 @@ export interface CreateTenantRequest {
   name: string;
   slug: string;
 }
+
+// Log query response types (OpenObserve)
+export interface LogQueryResponse {
+  status: string;
+  data: {
+    resultType: string;
+    result: LogHit[];
+  };
+}
+
+export interface LogHit {
+  _timestamp: number;
+  message: string;
+  source: string;
+  agent_id: string;
+  log_type: string;
+  level?: string;
+  method?: string;
+  path?: string;
+  upstream_host?: string;
+  response_code?: number;
+  duration_ms?: number;
+  syscall?: string;
+  syscall_result?: string;
+  [key: string]: unknown;
+}

@@ -569,7 +569,7 @@ def get_tenant_agent_ids(db: Session, tenant_id: int) -> List[str]:
 # -----------------------------------------------------------------------------
 # Rate Limiting Setup (Redis-backed for horizontal scaling)
 # -----------------------------------------------------------------------------
-REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379')
+REDIS_URL = os.environ.get('REDIS_URL', '')
 
 
 def get_token_identifier(request: Request) -> str:
@@ -582,10 +582,11 @@ def get_token_identifier(request: Request) -> str:
     return f"ip:{get_remote_address(request)}"
 
 
-# Initialize limiter with Redis storage
+# Initialize limiter - use Redis if configured, otherwise in-memory
+# In-memory is fine for single-instance deploys and tests
 limiter = Limiter(
     key_func=get_token_identifier,
-    storage_uri=REDIS_URL,
+    storage_uri=REDIS_URL if REDIS_URL else "memory://",
     strategy="fixed-window",  # or "moving-window" for stricter limiting
 )
 
@@ -593,7 +594,10 @@ limiter = Limiter(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting AI Devbox Control Plane")
-    logger.info(f"Rate limiting enabled with Redis: {REDIS_URL}")
+    if REDIS_URL:
+        logger.info(f"Rate limiting enabled with Redis: {REDIS_URL}")
+    else:
+        logger.info("Rate limiting enabled with in-memory storage (single instance only)")
     yield
     logger.info("Shutting down")
 
@@ -648,6 +652,110 @@ async def get_info():
             "usage_reporting"
         ]
     }
+
+
+@app.get("/api/v1/auth/me")
+async def get_current_user(token_info: TokenInfo = Depends(verify_token)):
+    """Get current user info from token"""
+    return {
+        "token_type": token_info.token_type,
+        "agent_id": token_info.agent_id,
+        "tenant_id": token_info.tenant_id,
+        "is_super_admin": token_info.is_super_admin
+    }
+
+
+# =============================================================================
+# OpenObserve Log Query (for DP audit logs)
+# =============================================================================
+
+OPENOBSERVE_URL = os.environ.get('OPENOBSERVE_URL', 'http://openobserve:5080')
+OPENOBSERVE_USER = os.environ.get('OPENOBSERVE_USER', 'admin@maltbox.local')
+OPENOBSERVE_PASSWORD = os.environ.get('OPENOBSERVE_PASSWORD', 'admin')
+
+
+@app.get("/api/v1/logs/query")
+@limiter.limit("30/minute")
+async def query_agent_logs(
+    request: Request,
+    query: str = "",
+    source: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    limit: int = 100,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    token_info: TokenInfo = Depends(require_admin)
+):
+    """Query agent logs from OpenObserve (admin only).
+
+    Args:
+        query: Search text (full-text search in message field)
+        source: Filter by source (envoy, agent, coredns, gvisor)
+        agent_id: Filter by agent ID
+        limit: Max number of log lines to return
+        start: Start time (RFC3339, e.g., 2024-01-01T00:00:00Z)
+        end: End time (RFC3339)
+    """
+    import httpx
+    from datetime import datetime, timedelta
+
+    # Build SQL query for OpenObserve
+    conditions = []
+    if query:
+        conditions.append(f"message LIKE '%{query}%'")
+    if source:
+        conditions.append(f"source = '{source}'")
+    if agent_id:
+        conditions.append(f"agent_id = '{agent_id}'")
+
+    # Time range
+    if not end:
+        end_time = datetime.utcnow()
+    else:
+        end_time = datetime.fromisoformat(end.replace('Z', '+00:00'))
+
+    if not start:
+        start_time = end_time - timedelta(hours=1)
+    else:
+        start_time = datetime.fromisoformat(start.replace('Z', '+00:00'))
+
+    # Convert to microseconds for OpenObserve
+    start_us = int(start_time.timestamp() * 1_000_000)
+    end_us = int(end_time.timestamp() * 1_000_000)
+
+    where_clause = " AND ".join(conditions) if conditions else "1=1"
+    sql = f"SELECT * FROM default WHERE {where_clause} ORDER BY _timestamp DESC LIMIT {limit}"
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{OPENOBSERVE_URL}/api/default/_search",
+            json={
+                "query": {
+                    "sql": sql,
+                    "start_time": start_us,
+                    "end_time": end_us,
+                }
+            },
+            auth=(OPENOBSERVE_USER, OPENOBSERVE_PASSWORD),
+            timeout=30.0
+        )
+
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"OpenObserve query failed: {response.text}"
+            )
+
+        result = response.json()
+
+        # Transform to consistent format for UI
+        return {
+            "status": "success",
+            "data": {
+                "resultType": "streams",
+                "result": result.get("hits", [])
+            }
+        }
 
 
 # =============================================================================

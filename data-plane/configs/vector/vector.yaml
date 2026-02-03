@@ -1,0 +1,220 @@
+# =============================================================================
+# Vector Configuration - Data Plane Log Collection
+# Collects from: Docker containers, gVisor audit logs, agent app logs
+# Ships to: OpenObserve (control plane)
+# =============================================================================
+
+data_dir: /var/lib/vector
+
+# =============================================================================
+# SOURCES
+# =============================================================================
+sources:
+  # Docker container logs (agent, envoy, coredns stdout/stderr)
+  docker_logs:
+    type: docker_logs
+    include_containers:
+      - "agent"
+      - "envoy-proxy"
+      - "dns-filter"
+      - "agent-manager"
+
+  # gVisor debug/audit logs (security-critical)
+  # Requires runsc configured with: --debug-log=/var/log/runsc/
+  gvisor_logs:
+    type: file
+    include:
+      - /var/log/runsc/**/*.log
+    read_from: beginning
+    fingerprint:
+      strategy: device_and_inode
+
+  # Agent application logs (custom app logging)
+  agent_app_logs:
+    type: file
+    include:
+      - /var/log/agent/**/*.log
+    read_from: end
+
+# =============================================================================
+# TRANSFORMS
+# =============================================================================
+transforms:
+  # Parse Docker logs and extract metadata
+  parse_docker:
+    type: remap
+    inputs:
+      - docker_logs
+    source: |
+      # Extract container name
+      container = get(.container_name) ?? "unknown"
+
+      # Determine source from container name
+      .source = if contains(string!(container), "envoy") {
+        "envoy"
+      } else if contains(string!(container), "agent-manager") {
+        "agent-manager"
+      } else if contains(string!(container), "agent") {
+        "agent"
+      } else if contains(string!(container), "dns") {
+        "coredns"
+      } else {
+        "unknown"
+      }
+
+      # Set log type based on stream
+      .log_type = if .stream == "stderr" { "stderr" } else { "stdout" }
+
+      # Try to parse as JSON (Envoy access logs are JSON)
+      msg = string(.message) ?? ""
+      parsed, err = parse_json(msg)
+      if err == null {
+        # Envoy access log fields
+        .method = get(parsed, "method") ?? ""
+        .path = get(parsed, "path") ?? ""
+        .upstream_host = get(parsed, "upstream_host") ?? ""
+        .response_code = get(parsed, "response_code") ?? 0
+        .duration_ms = get(parsed, "duration") ?? 0
+        .bytes_sent = get(parsed, "bytes_sent") ?? 0
+        .request_id = get(parsed, "request_id") ?? ""
+
+        if .source == "envoy" && .method != "" {
+          .log_type = "access"
+        }
+      }
+
+      # Add metadata
+      .agent_id = get_env_var("AGENT_ID") ?? "default"
+      .hostname = get_env_var("HOSTNAME") ?? "unknown"
+      .environment = get_env_var("ENVIRONMENT") ?? "development"
+
+      # OpenObserve stream routing
+      ._stream = .source
+
+  # Parse gVisor logs (security audit)
+  parse_gvisor:
+    type: remap
+    inputs:
+      - gvisor_logs
+    source: |
+      .source = "gvisor"
+      .agent_id = get_env_var("AGENT_ID") ?? "default"
+      .hostname = get_env_var("HOSTNAME") ?? "unknown"
+      .environment = get_env_var("ENVIRONMENT") ?? "development"
+
+      msg = string(.message) ?? ""
+
+      # Parse gVisor log format
+      # Example: I0215 10:30:45.123456 12345 strace.go:123] [pid 1] openat(...)
+      parsed, err = parse_regex(msg, r'^(?P<level>[IWEF])(?P<date>\d{4}) (?P<time>[\d:.]+)\s+(?P<pid>\d+)\s+(?P<file>[^:]+):(?P<line>\d+)\]\s*(?P<content>.*)$')
+
+      if err == null {
+        .level = if parsed.level == "I" { "info" }
+                 else if parsed.level == "W" { "warning" }
+                 else if parsed.level == "E" { "error" }
+                 else { "fatal" }
+
+        content = string(parsed.content) ?? ""
+
+        # Extract syscall info if present
+        syscall_match, serr = parse_regex(content, r'\[.*?\]\s+(?P<syscall>\w+)\(.*\)\s*=\s*(?P<result>.+)')
+        if serr == null {
+          .syscall = syscall_match.syscall
+          result_str = string(syscall_match.result) ?? ""
+          # Check if denied (EPERM, EACCES, etc.)
+          .syscall_result = if contains(result_str, "EPERM") || contains(result_str, "EACCES") || contains(result_str, "denied") {
+            "denied"
+          } else if contains(result_str, "errno") {
+            "error"
+          } else {
+            "allowed"
+          }
+          .log_type = "syscall"
+        } else {
+          .log_type = "audit"
+        }
+      } else {
+        .log_type = "debug"
+        .level = "info"
+      }
+
+      # OpenObserve stream - separate stream for security events
+      ._stream = "gvisor"
+
+  # Parse agent app logs
+  parse_agent_app:
+    type: remap
+    inputs:
+      - agent_app_logs
+    source: |
+      .source = "agent"
+      .log_type = "app"
+      .agent_id = get_env_var("AGENT_ID") ?? "default"
+      .hostname = get_env_var("HOSTNAME") ?? "unknown"
+      .environment = get_env_var("ENVIRONMENT") ?? "development"
+
+      # Try JSON parsing
+      msg = string(.message) ?? ""
+      parsed, err = parse_json(msg)
+      if err == null {
+        .level = get(parsed, "level") ?? "info"
+      } else {
+        .level = "info"
+      }
+
+      ._stream = "agent"
+
+  # Combine all parsed logs
+  all_logs:
+    type: route
+    inputs:
+      - parse_docker
+      - parse_gvisor
+      - parse_agent_app
+    route:
+      security: '.source == "gvisor" && .syscall_result == "denied"'
+      access: '.source == "envoy" && .log_type == "access"'
+      _default: true
+
+# =============================================================================
+# SINKS
+# =============================================================================
+sinks:
+  # Primary: OpenObserve
+  openobserve:
+    type: http
+    inputs:
+      - all_logs._default
+      - all_logs.security
+      - all_logs.access
+    uri: "http://${OPENOBSERVE_HOST:-host.docker.internal}:${OPENOBSERVE_PORT:-5080}/api/default/default/_json"
+    method: post
+    encoding:
+      codec: json
+    auth:
+      strategy: basic
+      user: "${OPENOBSERVE_USER:-admin@maltbox.local}"
+      password: "${OPENOBSERVE_PASSWORD:-admin}"
+    batch:
+      max_bytes: 10485760
+      timeout_secs: 5
+    request:
+      headers:
+        Content-Type: application/json
+
+  # Local file backup (if OpenObserve unreachable)
+  file_backup:
+    type: file
+    inputs:
+      - all_logs._default
+    path: /var/log/vector/backup/%Y-%m-%d.log
+    encoding:
+      codec: json
+
+  # Console output for debugging (disable in production)
+  # console:
+  #   type: console
+  #   inputs:
+  #     - all_logs._default
+  #   encoding:
+  #     codec: json

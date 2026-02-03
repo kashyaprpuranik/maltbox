@@ -19,6 +19,7 @@ import type {
   AgentApprovalResponse,
   Tenant,
   CreateTenantRequest,
+  LogQueryResponse,
 } from '../types/api';
 
 const API_BASE = './api/v1';
@@ -75,6 +76,19 @@ export const api = {
 
   clearToken: () => {
     localStorage.removeItem('api_token');
+  },
+
+  // Current user info
+  getCurrentUser: async (): Promise<{
+    token_type: string;
+    agent_id: string | null;
+    tenant_id: number | null;
+    is_super_admin: boolean;
+  }> => {
+    const response = await fetch(`${API_BASE}/auth/me`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse(response);
   },
 
   // Health
@@ -175,7 +189,7 @@ export const api = {
     return handleResponse<void>(response);
   },
 
-  // Audit Logs
+  // Audit Logs (Admin/CP logs from Postgres)
   getAuditLogs: async (
     params: AuditLogFilters = {}
   ): Promise<PaginatedResponse<AuditLog>> => {
@@ -189,6 +203,28 @@ export const api = {
       headers: getAuthHeaders(),
     });
     return handleResponse<PaginatedResponse<AuditLog>>(response);
+  },
+
+  // Agent Logs (DP logs from OpenObserve)
+  queryAgentLogs: async (params: {
+    query?: string;
+    source?: string;
+    agent_id?: string;
+    limit?: number;
+    start?: string;
+    end?: string;
+  }): Promise<LogQueryResponse> => {
+    const searchParams = new URLSearchParams();
+    if (params.query) searchParams.append('query', params.query);
+    if (params.source) searchParams.append('source', params.source);
+    if (params.agent_id) searchParams.append('agent_id', params.agent_id);
+    if (params.limit) searchParams.append('limit', String(params.limit));
+    if (params.start) searchParams.append('start', params.start);
+    if (params.end) searchParams.append('end', params.end);
+    const response = await fetch(`${API_BASE}/logs/query?${searchParams}`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<LogQueryResponse>(response);
   },
 
   // Agent Management (per data plane)

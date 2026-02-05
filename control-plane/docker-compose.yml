@@ -119,36 +119,6 @@ services:
       retries: 3
 
   # ===========================================================================
-  # Grafana - Dashboards
-  # ===========================================================================
-  grafana:
-    image: grafana/grafana:10.2.0
-    container_name: grafana
-
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
-      # Sub-path support for /grafana/ proxy via admin-ui nginx
-      # Set GRAFANA_ROOT_URL in .env for custom domain, e.g., https://cp.cat-buddy.com/grafana/
-      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost:9080/grafana/}
-      - GF_SERVER_SERVE_FROM_SUB_PATH=true
-
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./configs/grafana/provisioning:/etc/grafana/provisioning:ro
-
-    ports:
-      - "3000:3000"
-
-    networks:
-      - control-net
-
-    depends_on:
-      - openobserve
-
-    restart: unless-stopped
-
-  # ===========================================================================
   # Admin UI - React Web Console
   # ===========================================================================
   admin-ui:
@@ -209,4 +179,3 @@ volumes:
   postgres-data:
   redis-data:
   openobserve-data:
-  grafana-data:

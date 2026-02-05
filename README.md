@@ -9,52 +9,53 @@ Secure development environment for AI agents with isolated networking and centra
 │                           CONTROL PLANE (control-net)                            │
 │                           (runs on provider/cloud)                               │
 │                                                                                  │
-│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────────┐ │
-│  │ Postgres  │  │ Admin UI  │  │OpenObserve│  │  Grafana  │  │  FRP Server   │ │
-│  │ (secrets) │  │  (:9080)  │  │  (:5080)  │  │  (:3000)  │  │ (:7000,:6000+)│ │
-│  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └───────┬───────┘ │
-│        │              │              │              │                 │         │
-│        ▼              ▼              │              │                 │         │
-│  ┌────────────────────────────────┐  │              │                 │         │
-│  │     Control Plane API (:8002)  │  │              │                 │         │
-│  │                                │  │              │                 │         │
-│  │  /api/v1/secrets    Secrets    │  │              │                 │         │
-│  │  /api/v1/allowlist  Allowlist  │  │              │                 │         │
-│  │  /api/v1/agents     Agent Mgmt │  │              │                 │         │
-│  │  /api/v1/rate-limits Rate Limits│ │              │                 │         │
-│  └────────────────────────────────┘  │              │                 │         │
-│                 ▲                     │              │                 │         │
-└─────────────────┼─────────────────────┼──────────────┼─────────────────┼─────────┘
-                  │                     │              │                 │
-                  │ Heartbeat/Commands  │ Logs         │ Dashboards      │ SSH Tunnels
-                  │                     │              │                 │
-┌─────────────────┼─────────────────────┼──────────────┼─────────────────┼─────────┐
-│                 │          DATA PLANE │              │                 │         │
-│                 │     (runs on client)│              │                 │         │
-│                 │                     │              │                 ▼         │
-│  ┌──────────────┴───────────┐  ┌──────┴───────┐            ┌─────────────────┐  │
-│  │      Agent Manager       │  │    Vector    │────────┘   │   FRP Client    │  │
-│  │  (polls CP, syncs DNS)   │  │   (logs)     │            │ (connects to CP)│  │
-│  └──────────────────────────┘  └──────────────┘            └────────┬────────┘  │
-│                                                                      │          │
-│  ┌───────────────────────────────────────────────────────────────────┼────────┐ │
-│  │                        agent-net (isolated)                       │        │ │
-│  │  ┌────────────────────────────────────────────────────────────────┼──────┐ │ │
-│  │  │                     Agent Container                            │      │ │ │
-│  │  │  • Isolated network (no direct internet access)                │      │ │ │
-│  │  │  • All HTTP(S) via Envoy proxy                              SSH:22    │ │ │
-│  │  │  • DNS via CoreDNS filter (allowlist enforced)                 │      │ │ │
-│  │  └────────────────────────────────────────────────────────────────┼──────┘ │ │
-│  │              │                           │                        │        │ │
-│  │              ▼                           ▼                        │        │ │
-│  │       ┌─────────────┐             ┌─────────────┐                 │        │ │
-│  │       │   Envoy     │             │   CoreDNS   │                 │        │ │
-│  │       │  (+ creds)  │             │  (filter)   │                 │        │ │
-│  │       └─────────────┘             └─────────────┘                 │        │ │
-│  └───────────────────────────────────────────────────────────────────┼────────┘ │
-└──────────────────────────────────────────────────────────────────────┼──────────┘
-                                                                       │
-                                                            User SSH ──┘
+│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────────┐                │
+│  │ Postgres  │  │ Admin UI  │  │OpenObserve│  │  FRP Server   │                │
+│  │ (secrets) │  │  (:9080)  │  │  (:5080)  │  │    (:7000)    │                │
+│  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └───────┬───────┘                │
+│        │              │              │                 │                        │
+│        ▼              ▼              │                 │                        │
+│  ┌────────────────────────────────┐  │                 │                        │
+│  │     Control Plane API (:8002)  │  │                 │                        │
+│  │                                │  │                 │                        │
+│  │  /api/v1/secrets    Secrets    │  │                 │                        │
+│  │  /api/v1/allowlist  Allowlist  │  │                 │                        │
+│  │  /api/v1/agents     Agent Mgmt │  │                 │                        │
+│  │  /api/v1/terminal   Web Term   │  │                 │                        │
+│  └────────────────────────────────┘  │                 │                        │
+│                 ▲                     │                 │                        │
+└─────────────────┼─────────────────────┼─────────────────┼────────────────────────┘
+                  │                     │                 │
+                  │ Heartbeat/Commands  │ Logs            │ STCP Tunnels
+                  │                     │                 │
+┌─────────────────┼─────────────────────┼─────────────────┼────────────────────────┐
+│                 │          DATA PLANE │                 │                        │
+│                 │     (runs on client)│                 │                        │
+│                 │                     │                 ▼                        │
+│  ┌──────────────┴───────────┐  ┌──────┴───────┐  ┌─────────────────┐           │
+│  │      Agent Manager       │  │    Vector    │  │   FRP Client    │           │
+│  │  (polls CP, syncs DNS)   │  │   (logs)     │  │ (STCP to CP)    │           │
+│  └──────────────────────────┘  └──────────────┘  └────────┬────────┘           │
+│                                                            │                    │
+│  ┌─────────────────────────────────────────────────────────┼──────────────────┐ │
+│  │                        agent-net (isolated)             │                  │ │
+│  │  ┌──────────────────────────────────────────────────────┼────────────────┐ │ │
+│  │  │                     Agent Container                  │                │ │ │
+│  │  │  • Isolated network (no direct internet access)      │                │ │ │
+│  │  │  • All HTTP(S) via Envoy proxy                    SSH:22             │ │ │
+│  │  │  • DNS via CoreDNS filter (allowlist enforced)       │                │ │ │
+│  │  └──────────────────────────────────────────────────────┼────────────────┘ │ │
+│  │              │                           │              │                  │ │
+│  │              ▼                           ▼              │                  │ │
+│  │       ┌─────────────┐             ┌─────────────┐       │                  │ │
+│  │       │   Envoy     │             │   CoreDNS   │       │                  │ │
+│  │       │  (+ creds)  │             │  (filter)   │       │                  │ │
+│  │       └─────────────┘             └─────────────┘       │                  │ │
+│  └─────────────────────────────────────────────────────────┼──────────────────┘ │
+└────────────────────────────────────────────────────────────┼────────────────────┘
+                                                             │
+                                              Web Terminal ──┘
+                                              (via Admin UI)
 ```
 
 ## Security Model
@@ -97,9 +98,9 @@ export ENCRYPTION_KEY=$(python -c "from cryptography.fernet import Fernet; print
 docker-compose up -d
 
 # Access points:
-# - Admin UI: http://localhost:9080
-# - API docs: http://localhost:8002/docs
-# - Grafana:  http://localhost:3000 (admin/admin)
+# - Admin UI:     http://localhost:9080
+# - API docs:     http://localhost:8002/docs
+# - OpenObserve:  http://localhost:5080 (admin@maltbox.local/admin)
 ```
 
 ### 2. Start Data Plane
@@ -118,47 +119,48 @@ export AGENT_ID=my-agent-01           # Optional: unique ID (default: "default")
 docker-compose up -d
 
 # With log shipping to OpenObserve:
-export LOKI_HOST=<control-plane-ip>
+export OPENOBSERVE_HOST=<control-plane-ip>
 docker-compose --profile auditing up -d
 ```
 
-### 3. SSH Access to Agents (Optional)
+### 3. Web Terminal Access (Optional)
 
-For interactive SSH access to isolated agent containers, the system uses [FRP (Fast Reverse Proxy)](https://github.com/fatedier/frp) to establish secure tunnels without requiring inbound ports on the data plane.
+The Admin UI includes a browser-based terminal for accessing agent containers. This uses STCP (Secret TCP) mode with FRP for secure tunneling through a single port.
 
 ```
-User SSH → Control Plane:6000-6099 → frps → frpc → Agent:22
-           (tunnel ports)                         (data plane)
+Browser → Admin UI → WebSocket → Control Plane API → STCP → FRP → Agent:22
 ```
 
-**Control Plane** (already configured in docker-compose.yml):
-- FRP server listens on port 7000 (control) and exposes ports 6000-6099 for SSH tunnels
-- Dashboard available at port 7500
+**Setup:**
 
-**Data Plane** setup:
-```bash
-# Add to data-plane/.env
-FRP_SERVER_ADDR=<control-plane-ip>
-FRP_AUTH_TOKEN=<token>              # Must match control plane
-FRP_REMOTE_PORT=6000                # Unique per agent (6000, 6001, ...)
-SSH_AUTHORIZED_KEYS="ssh-rsa AAAA... user@host"
+1. Generate STCP secret for the agent (via Admin UI or API):
+   ```bash
+   curl -X POST http://localhost:8002/api/v1/agents/my-agent/stcp-secret \
+     -H "Authorization: Bearer admin-token"
+   ```
 
-# Start with SSH profile
-docker-compose --profile ssh up -d
-```
+2. Configure data plane with the secret:
+   ```bash
+   # Add to data-plane/.env
+   FRP_SERVER_ADDR=<control-plane-ip>
+   FRP_AUTH_TOKEN=<token>
+   STCP_SECRET_KEY=<secret-from-step-1>
+   SSH_AUTHORIZED_KEYS="ssh-rsa AAAA... user@host"
 
-**Connect**:
-```bash
-ssh -p 6000 agent@<control-plane-ip>
-```
+   # Start with SSH profile
+   docker-compose --profile ssh up -d
+   ```
 
-See [control-plane/README.md](control-plane/README.md#ssh-access-to-agents) and [data-plane/README.md](data-plane/README.md#ssh-access-via-frp) for detailed configuration.
+3. Access terminal from Admin UI Dashboard (requires `developer` role)
+
+See [control-plane/README.md](control-plane/README.md#web-terminal) and [data-plane/README.md](data-plane/README.md#ssh-access-via-frp) for detailed configuration.
 
 ## Features
 
 | Feature | Description |
 |---------|-------------|
 | **Admin UI** | Web console for managing agents, secrets, allowlists |
+| **Web Terminal** | Browser-based SSH access to agents (xterm.js) |
 | **Multi-Agent Support** | Manage multiple data planes from a single control plane |
 | **Agent Control** | Start/stop/restart/wipe agent containers from UI |
 | **Domain Allowlist** | Only approved domains can be accessed (synced to CoreDNS) |
@@ -169,7 +171,8 @@ See [control-plane/README.md](control-plane/README.md#ssh-access-to-agents) and 
 | **Secret Management** | Encrypted secrets in Postgres (Fernet/AES) |
 | **Rate Limiting** | Per-domain rate limits to control API usage |
 | **Audit Logs** | Full audit trail of all actions |
-| **SSH Access** | Secure SSH tunnels to agents via FRP (no inbound ports on data plane) |
+| **RBAC** | Role-based access control (admin, developer roles) |
+| **STCP Tunnels** | Secure tunnels via single port (no port-per-agent allocation) |
 | **gVisor Isolation** | Optional kernel-level syscall isolation (`CONTAINER_RUNTIME=runsc`) |
 | **IPv6 Disabled** | Prevents bypass of IPv4 egress controls |
 
@@ -180,8 +183,7 @@ See [control-plane/README.md](control-plane/README.md#ssh-access-to-agents) and 
 ├── control-plane/
 │   ├── docker-compose.yml      # Control plane services
 │   ├── configs/
-│   │   ├── grafana/            # Grafana dashboards
-│   │   └── frps/               # FRP server config (SSH tunnels)
+│   │   └── frps/               # FRP server config (STCP tunnels)
 │   └── services/
 │       ├── control-plane/      # Control plane API (secrets, allowlist, audit)
 │       └── admin-ui/           # React admin console
@@ -194,7 +196,7 @@ See [control-plane/README.md](control-plane/README.md#ssh-access-to-agents) and 
     │   ├── envoy/              # Proxy + credential injection (Lua filter)
     │   ├── vector/             # Log collection & forwarding
     │   ├── gvisor/             # gVisor runtime config
-    │   └── frpc/               # FRP client config (SSH tunnels)
+    │   └── frpc/               # FRP client config (STCP tunnels)
     ├── services/
     │   └── agent-manager/      # Manages agent container lifecycle
     └── tests/                  # Unit and E2E tests
@@ -302,18 +304,22 @@ curl -X POST http://localhost:8002/api/v1/agents/default/restart \
 
 ## Authentication & API Tokens
 
-### Token Types
+### Token Types & Roles
 
-| Type | Purpose | Access |
-|------|---------|--------|
-| `admin` | UI/Management operations | Full API access (secrets, allowlist, agents, tokens, rate-limits, audit-logs) |
-| `agent` | Data plane operations | Heartbeat, secrets/for-domain, allowlist/export, rate-limits/for-domain (scoped to agent_id) |
+| Type | Role | Access |
+|------|------|--------|
+| `admin` | `admin` | Full API access (secrets, allowlist, agents, tokens, rate-limits, audit-logs) |
+| `admin` | `developer` | Read access + web terminal access |
+| `agent` | - | Heartbeat, secrets/for-domain, allowlist/export, rate-limits/for-domain (scoped to agent_id) |
 
-### Legacy Tokens (Backwards Compatible)
+### Default Development Tokens
 
-For development, legacy tokens from the `API_TOKENS` environment variable still work and are treated as admin tokens:
-- `dev-token`
-- `admin-token`
+The following tokens are automatically seeded for development:
+
+| Token Name | Raw Token | Role | Super Admin |
+|------------|-----------|------|-------------|
+| `admin-token` | `admin-test-token-do-not-use-in-production` | admin | Yes |
+| `dev-token` | `dev-test-token-do-not-use-in-production` | developer | No |
 
 ### Creating API Tokens
 
@@ -322,21 +328,27 @@ Tokens are managed via the Admin UI (`/tokens`) or API:
 ```bash
 # Create an admin token
 curl -X POST http://localhost:8002/api/v1/tokens \
-  -H "Authorization: Bearer dev-token" \
+  -H "Authorization: Bearer admin-token" \
   -H "Content-Type: application/json" \
-  -d '{"name": "my-admin-token", "token_type": "admin"}'
+  -d '{"name": "my-admin-token", "token_type": "admin", "roles": "admin"}'
+
+# Create a developer token (can access web terminal)
+curl -X POST http://localhost:8002/api/v1/tokens \
+  -H "Authorization: Bearer admin-token" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-dev-token", "token_type": "admin", "roles": "developer"}'
 
 # Create an agent token (scoped to specific agent)
 curl -X POST http://localhost:8002/api/v1/tokens \
-  -H "Authorization: Bearer dev-token" \
+  -H "Authorization: Bearer admin-token" \
   -H "Content-Type: application/json" \
   -d '{"name": "prod-agent-token", "token_type": "agent", "agent_id": "prod-agent-01"}'
 
 # Create token with expiry
 curl -X POST http://localhost:8002/api/v1/tokens \
-  -H "Authorization: Bearer dev-token" \
+  -H "Authorization: Bearer admin-token" \
   -H "Content-Type: application/json" \
-  -d '{"name": "temp-token", "token_type": "admin", "expires_in_days": 30}'
+  -d '{"name": "temp-token", "token_type": "admin", "roles": "admin", "expires_in_days": 30}'
 ```
 
 **Important**: The raw token is only returned once on creation. Store it securely!
@@ -352,15 +364,15 @@ curl http://localhost:8002/api/v1/agents \
 
 # Approve an agent
 curl -X POST http://localhost:8002/api/v1/agents/my-agent/approve \
-  -H "Authorization: Bearer dev-token"
+  -H "Authorization: Bearer admin-token"
 
 # Reject an agent (removes it)
 curl -X POST http://localhost:8002/api/v1/agents/my-agent/reject \
-  -H "Authorization: Bearer dev-token"
+  -H "Authorization: Bearer admin-token"
 
 # Revoke approval (agent must be re-approved)
 curl -X POST http://localhost:8002/api/v1/agents/my-agent/revoke \
-  -H "Authorization: Bearer dev-token"
+  -H "Authorization: Bearer admin-token"
 ```
 
 Unapproved agents can still send heartbeats but will not receive commands (wipe, restart, etc.).
@@ -387,8 +399,8 @@ python seed.py --reset --show-token
 This creates:
 - `test-agent` - An approved agent for UI testing (with agent-specific config examples)
 - `pending-agent` - A pending agent to test the approval flow
-- `default-admin` - An admin token
-- `test-agent-token` - An agent token for test-agent
+- `admin-token` - Admin role token (super admin)
+- `dev-token` - Developer role token (terminal access)
 - Sample allowlist entries and rate limits (both global and agent-specific)
 
 ## Per-Agent Configuration
@@ -406,7 +418,7 @@ You can create agent-specific secrets, allowlist entries, and rate limits that o
 ```bash
 # Agent-specific allowlist entry
 curl -X POST http://localhost:8002/api/v1/allowlist \
-  -H "Authorization: Bearer dev-token" \
+  -H "Authorization: Bearer admin-token" \
   -H "Content-Type: application/json" \
   -d '{
     "entry_type": "domain",
@@ -417,7 +429,7 @@ curl -X POST http://localhost:8002/api/v1/allowlist \
 
 # Agent-specific secret
 curl -X POST http://localhost:8002/api/v1/secrets \
-  -H "Authorization: Bearer dev-token" \
+  -H "Authorization: Bearer admin-token" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "PROD_API_KEY",
@@ -430,7 +442,7 @@ curl -X POST http://localhost:8002/api/v1/secrets \
 
 # Agent-specific rate limit (overrides global rate limit)
 curl -X POST http://localhost:8002/api/v1/rate-limits \
-  -H "Authorization: Bearer dev-token" \
+  -H "Authorization: Bearer admin-token" \
   -H "Content-Type: application/json" \
   -d '{
     "domain_pattern": "api.openai.com",
@@ -448,7 +460,7 @@ Agent tokens only see configuration for their assigned agent plus global configu
 ```bash
 # Create agent token
 curl -X POST http://localhost:8002/api/v1/tokens \
-  -H "Authorization: Bearer dev-token" \
+  -H "Authorization: Bearer admin-token" \
   -H "Content-Type: application/json" \
   -d '{"name": "prod-token", "token_type": "agent", "agent_id": "prod-agent"}'
 
@@ -502,13 +514,14 @@ pytest tests/test_e2e.py -v
 - [x] Centralized logging (Vector → OpenObserve)
 - [x] gVisor kernel isolation (optional, `CONTAINER_RUNTIME=runsc`)
 - [x] IPv6 disabled (prevent egress control bypass)
-- [x] SSH access via FRP tunnels
+- [x] SSH access via FRP tunnels (STCP mode)
+- [x] Web terminal in Admin UI (xterm.js)
+- [x] RBAC (admin/developer roles)
 
 ### Planned
 - [ ] TLS between data plane and control plane
 - [ ] mTLS for DP→CP communication (step-ca)
 - [ ] Package registry proxy/allowlist (npm, pip, cargo)
-- [ ] Web terminal in Admin UI (xterm.js via SSH)
 - [ ] Alert rules for security events (gVisor syscall denials, rate limit hits)
 
 ## License

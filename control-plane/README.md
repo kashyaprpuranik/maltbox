@@ -15,18 +15,18 @@ The control plane provides centralized management, policy enforcement, secrets s
 │        │                   │                                    │
 │        │                   │ (read logs)                        │
 │        │                   ▼                                    │
-│        │            ┌─────────────┐    ┌─────────────┐         │
-│        └───────────►│   Grafana   │───►│    Loki     │         │
-│                     │ (dashboards)│    │   (logs)    │         │
-│                     └─────────────┘    └─────────────┘         │
-│                                              ▲                  │
-└──────────────────────────────────────────────│──────────────────┘
-                                               │ (write logs)
-        ┌──────────────────────────────────────┼──────────────┐
-        │                                      │              │
-┌───────┴──────┐  ┌───────────────┐  ┌───────────────┐
+│        │            ┌─────────────┐                             │
+│        └───────────►│ OpenObserve │                             │
+│                     │ (logs + UI) │                             │
+│                     └─────────────┘                             │
+│                            ▲                                    │
+└────────────────────────────│────────────────────────────────────┘
+                             │ (write logs)
+        ┌────────────────────┼────────────────────────────────┐
+        │                    │                                │
+┌───────┴──────┐  ┌──────────┴────┐  ┌───────────────┐
 │ Data Plane 1 │  │ Data Plane 2  │  │ Data Plane N  │
-│ (fluent-bit) │  │ (fluent-bit)  │  │ (fluent-bit)  │
+│   (vector)   │  │   (vector)    │  │   (vector)    │
 │ (agent-mgr)  │  │ (agent-mgr)   │  │ (agent-mgr)   │
 └──────────────┘  └───────────────┘  └───────────────┘
       │                  │                   │
@@ -34,8 +34,8 @@ The control plane provides centralized management, policy enforcement, secrets s
 ```
 
 **Log Flow**:
-- **Write**: Data plane fluent-bit → Loki (direct, port 3100)
-- **Read**: Admin UI → Control Plane API → Loki (proxied queries)
+- **Write**: Data plane Vector → OpenObserve (direct, port 5080)
+- **Read**: Admin UI → Control Plane API → OpenObserve (proxied queries)
 
 **Multi-Data Plane Management**:
 - Each data plane has a unique `agent_id`
@@ -59,47 +59,42 @@ The control plane provides centralized management, policy enforcement, secrets s
 |---------|------|-------------|
 | control-plane-api | 8002 | FastAPI REST API |
 | admin-ui | 9080 | React admin console |
-| grafana | 3000 | Dashboards and log viewer |
-| loki | 3100 | Log storage (receives from data plane) |
+| openobserve | 5080 | Log storage & UI |
 | postgres | 5432 | State storage (internal) |
-| frps | 7000, 6000-6099 | FRP server for agent SSH tunnels |
+| redis | 6379 | Rate limiting store (internal) |
+| frps | 7000 | FRP server for STCP tunnels |
 
-## SSH Access to Agents
+## Web Terminal
 
-Agents can be accessed via SSH through FRP reverse tunnels. The control plane runs an FRP server (`frps`) that accepts connections from data plane FRP clients (`frpc`).
+The Admin UI includes a browser-based terminal (xterm.js) for accessing agent containers. This requires the `developer` role.
 
 **Architecture:**
 ```
-User SSH → Control Plane:6000 → frps → frpc → Agent:22
-              (tunnel)                    (data plane)
+Browser (xterm.js) → WebSocket → Control Plane API → STCP → FRP → Agent:22
 ```
+
+**STCP Mode**: Uses FRP's Secret TCP mode - all tunnels go through a single port (7000) with secret-key authentication. No port-per-agent allocation needed.
 
 **Setup:**
 
-1. Configure FRP token in control plane `.env`:
+1. Generate STCP secret for the agent:
    ```bash
-   FRP_AUTH_TOKEN=your-secure-token
+   curl -X POST http://localhost:8002/api/v1/agents/my-agent/stcp-secret \
+     -H "Authorization: Bearer admin-token"
    ```
 
-2. Configure data plane `.env`:
-   ```bash
-   FRP_SERVER_ADDR=control-plane-host
-   FRP_AUTH_TOKEN=your-secure-token
-   FRP_REMOTE_PORT=6000  # Unique per agent
-   SSH_AUTHORIZED_KEYS="ssh-rsa AAAA... user@host"
-   ```
+2. Configure data plane with the secret (see data-plane README)
 
-3. Start data plane with SSH profile:
-   ```bash
-   docker-compose --profile ssh up -d
-   ```
+3. Access terminal from Admin UI Dashboard
 
-4. Connect:
-   ```bash
-   ssh -p 6000 agent@control-plane-host
-   ```
+**API Endpoints:**
 
-**FRP Dashboard:** http://localhost:7500 (admin / `FRP_DASHBOARD_PASSWORD`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/v1/agents/{agent_id}/stcp-secret` | Generate new STCP secret (admin) |
+| GET | `/api/v1/agents/{agent_id}/stcp-config` | Get STCP visitor config (developer) |
+| WS | `/api/v1/terminal/{agent_id}/ws` | WebSocket terminal endpoint |
+| GET | `/api/v1/terminal/sessions` | List terminal sessions (audit) |
 
 ## Quick Start
 
@@ -111,9 +106,9 @@ export ENCRYPTION_KEY=$(python -c "from cryptography.fernet import Fernet; print
 docker-compose up -d
 
 # Access services:
-# - Admin UI: http://localhost:9080
-# - API Docs: http://localhost:8002/docs
-# - Grafana:  http://localhost:3000 (admin/admin)
+# - Admin UI:     http://localhost:9080
+# - API Docs:     http://localhost:8002/docs
+# - OpenObserve:  http://localhost:5080 (admin@maltbox.local/admin)
 ```
 
 ## API Documentation
@@ -221,13 +216,22 @@ All API endpoints (except `/health` and `/api/v1/info`) require Bearer token aut
 curl -H "Authorization: Bearer your-token" http://localhost:8002/api/v1/secrets
 ```
 
-### Token Types
+### Token Types & Roles
 
-| Type | Purpose | Access |
-|------|---------|--------|
-| `admin` (super) | Platform management | Full API access across all tenants |
-| `admin` | Tenant management | Full API access within assigned tenant |
-| `agent` | Data plane | Heartbeat, secrets/for-domain, rate-limits/for-domain (scoped to agent_id) |
+| Type | Role | Access |
+|------|------|--------|
+| `admin` | `admin` | Full API access (secrets, allowlist, agents, tokens, rate-limits, audit-logs) |
+| `admin` | `developer` | Read access + web terminal access |
+| `agent` | - | Heartbeat, secrets/for-domain, rate-limits/for-domain (scoped to agent_id) |
+
+### Default Development Tokens
+
+The following tokens are automatically seeded:
+
+| Token Name | Raw Token | Role | Super Admin |
+|------------|-----------|------|-------------|
+| `admin-token` | `admin-test-token-do-not-use-in-production` | admin | Yes |
+| `dev-token` | `dev-test-token-do-not-use-in-production` | developer | No |
 
 ### Token Sources
 
@@ -241,7 +245,8 @@ curl -H "Authorization: Bearer your-token" http://localhost:8002/api/v1/secrets
 | `DATABASE_URL` | - | PostgreSQL connection string |
 | `ENCRYPTION_KEY` | - | Fernet key for secret encryption |
 | `API_TOKENS` | `dev-token` | Comma-separated allowed API tokens |
-| `LOKI_URL` | `http://loki:3100` | Loki URL for log queries |
+| `OPENOBSERVE_URL` | `http://openobserve:5080` | OpenObserve URL for log queries |
+| `REDIS_URL` | `redis://redis:6379` | Redis URL for rate limiting |
 | `DEFAULT_RATE_LIMIT_RPM` | `120` | Default requests per minute for unlisted domains |
 | `DEFAULT_RATE_LIMIT_BURST` | `20` | Default burst size for unlisted domains |
 
@@ -254,14 +259,14 @@ The control plane manages multiple data planes, which can run on different machi
 Data Plane 1                            Control Plane
 ┌─────────────┐                        ┌─────────────┐
 │   Envoy     │ ────── :8002 ───────►  │     API     │
-│ fluent-bit  │ ────── :3100 ───────►  │    Loki     │
+│   vector    │ ────── :5080 ───────►  │ OpenObserve │
 │agent-manager│ ────── :8002 ───────►  │  (manages)  │
 └─────────────┘   (heartbeat/poll)     │             │
                                        │  Multiple   │
 Data Plane 2                           │   Agents    │
 ┌─────────────┐                        │             │
 │   Envoy     │ ────── :8002 ───────►  │             │
-│ fluent-bit  │ ────── :3100 ───────►  │             │
+│   vector    │ ────── :5080 ───────►  │             │
 │agent-manager│ ────── :8002 ───────►  │             │
 └─────────────┘   (heartbeat/poll)     └─────────────┘
 ```
@@ -274,7 +279,8 @@ All connections are outbound from data planes - no inbound ports needed on data 
 |------|-----|------|---------|
 | Data plane (Envoy) | Control plane | 8002 | Credential/rate-limit lookups |
 | Data plane (agent-manager) | Control plane | 8002 | Heartbeat polling |
-| Data plane (fluent-bit) | Control plane | 3100 | Log shipping to Loki |
+| Data plane (vector) | Control plane | 5080 | Log shipping to OpenObserve |
+| Data plane (frpc) | Control plane | 7000 | STCP tunnel for terminal |
 
 **Data plane configuration:**
 Each data plane needs a unique `AGENT_ID` in its `.env` file:
@@ -385,7 +391,8 @@ python seed.py --show-token
 Default seed data includes:
 - Default tenant with slug `default`
 - `__default__` agent for tenant-global config
-- Super admin token `default-admin`
+- `admin-token` - Super admin token (role: admin)
+- `dev-token` - Developer token (role: developer)
 - Test agents (`test-agent`, `pending-agent`)
 - Sample allowlist entries, rate limits, and secrets
 
@@ -394,18 +401,19 @@ Default seed data includes:
 ```
 control-plane/
 ├── docker-compose.yml          # Service orchestration
-├── services/
-│   ├── control-plane/
-│   │   ├── main.py             # FastAPI application
-│   │   ├── seed.py             # Database seeder
-│   │   ├── entrypoint.sh       # Docker entrypoint (auto-seeds)
-│   │   ├── requirements.txt
-│   │   └── Dockerfile
-│   └── admin-ui/
-│       ├── src/                # React application
-│       ├── package.json
-│       └── Dockerfile
-└── configs/
-    └── grafana/
-        └── provisioning/       # Grafana datasources & dashboards
+├── deploy.sh                   # Deploy script (down, build, up)
+├── configs/
+│   └── frps/
+│       └── frps.toml           # FRP server config (STCP mode)
+└── services/
+    ├── control-plane/
+    │   ├── main.py             # FastAPI application
+    │   ├── seed.py             # Database seeder
+    │   ├── entrypoint.sh       # Docker entrypoint (migrations + auto-seed)
+    │   ├── requirements.txt
+    │   └── Dockerfile
+    └── admin-ui/
+        ├── src/                # React application
+        ├── package.json
+        └── Dockerfile
 ```

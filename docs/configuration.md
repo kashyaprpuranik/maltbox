@@ -2,6 +2,55 @@
 
 This guide covers configuring allowlists, secrets, rate limits, and per-agent settings.
 
+## Configuration Methods
+
+| Mode | Method | Description |
+|------|--------|-------------|
+| **Standalone** | Local Admin UI | http://localhost:8080 - structured form editor |
+| **Standalone** | maltbox.yaml | Edit `configs/maltbox.yaml` directly |
+| **Connected** | Control Plane UI | http://localhost:9080 - full admin console |
+| **Connected** | Control Plane API | REST API endpoints |
+
+## Standalone Mode: maltbox.yaml
+
+In standalone mode, all configuration is in a single YAML file:
+
+```yaml
+# data-plane/configs/maltbox.yaml
+mode: standalone
+
+dns:
+  upstream: [8.8.8.8, 8.8.4.4]
+  cache_ttl: 300
+
+rate_limits:
+  default:
+    requests_per_minute: 120
+    burst_size: 20
+
+domains:
+  - domain: api.openai.com
+    alias: openai              # Creates openai.devbox.local
+    timeout: 120s
+    rate_limit:
+      requests_per_minute: 60
+      burst_size: 10
+    credential:
+      header: Authorization
+      format: "Bearer {value}"
+      env: OPENAI_API_KEY      # Read from environment
+
+  - domain: pypi.org
+    read_only: true            # Block POST/PUT/DELETE
+```
+
+The Local Admin UI at http://localhost:8080 provides a structured editor:
+- **Domains tab**: Add/edit/delete with validation
+- **Settings tab**: DNS, rate limits, mode
+- **Raw YAML tab**: Direct editing
+
+## Connected Mode: Control Plane
+
 ## Adding Allowed Domains
 
 Domains can be managed via the Admin UI (http://localhost:9080) or API:

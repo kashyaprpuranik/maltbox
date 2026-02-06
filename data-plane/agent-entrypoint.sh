@@ -3,11 +3,12 @@ set -e
 
 # =============================================================================
 # Agent Container Entrypoint
-# Starts SSH server and keeps container running
+# Starts SSH server with persistent tmux sessions
 # =============================================================================
 
 USER_NAME="${USER_NAME:-agent}"
 USER_HOME="/home/$USER_NAME"
+WORKSPACE="/workspace"
 
 # Setup SSH authorized keys from environment or mounted file
 setup_ssh_keys() {
@@ -44,6 +45,41 @@ setup_host_keys() {
     fi
 }
 
+# Setup persistent tmux sessions
+setup_tmux() {
+    local tmux_dir="$WORKSPACE/.tmux"
+    local tmux_conf="$USER_HOME/.tmux.conf"
+
+    # Create tmux socket directory on persistent volume
+    mkdir -p "$tmux_dir"
+    chown "$USER_NAME:$USER_NAME" "$tmux_dir"
+    chmod 700 "$tmux_dir"
+
+    # Copy tmux config if not customized by user
+    if [ -f "/etc/tmux.conf" ] && [ ! -f "$tmux_conf" ]; then
+        cp /etc/tmux.conf "$tmux_conf"
+        chown "$USER_NAME:$USER_NAME" "$tmux_conf"
+    fi
+
+    # Set tmux socket directory environment
+    echo "export TMUX_TMPDIR=$tmux_dir" >> /etc/profile.d/tmux-env.sh
+
+    echo "Tmux configured with persistent sessions at $tmux_dir"
+}
+
+# Recover existing tmux sessions after container restart
+recover_tmux_sessions() {
+    local tmux_dir="$WORKSPACE/.tmux"
+
+    # Check if there are existing tmux sockets
+    if [ -d "$tmux_dir" ]; then
+        local socket_count=$(find "$tmux_dir" -name "default" -type s 2>/dev/null | wc -l)
+        if [ "$socket_count" -gt 0 ]; then
+            echo "Found existing tmux sessions (will be available on SSH login)"
+        fi
+    fi
+}
+
 # Main
 echo "=== AI Agent Container Starting ==="
 echo "Variant: ${VARIANT:-lean}"
@@ -51,11 +87,18 @@ echo "User: $USER_NAME"
 
 setup_host_keys
 setup_ssh_keys
+setup_tmux
+recover_tmux_sessions
 
 # Start SSH daemon
 echo "Starting SSH server..."
 /usr/sbin/sshd
 
 # Keep container running
-echo "Agent ready. SSH available on port 22."
+echo ""
+echo "Agent ready!"
+echo "  - SSH: port 22"
+echo "  - Sessions: auto-attach to tmux on login"
+echo "  - Workspace: $WORKSPACE (persistent)"
+echo ""
 exec tail -f /dev/null

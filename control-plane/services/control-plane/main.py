@@ -685,6 +685,31 @@ async def require_developer_role(token_info: TokenInfo = Depends(verify_token)) 
     return token_info
 
 
+async def require_admin_role_with_ip_check(
+    request: Request,
+    token_info: TokenInfo = Depends(verify_token),
+    db: Session = Depends(get_db)
+) -> TokenInfo:
+    """Require admin role AND verify IP ACL for sensitive operations.
+
+    Use this for endpoints that modify security-sensitive resources:
+    - Allowlist entries
+    - Secrets
+    - Rate limits
+    - Agent commands (wipe, restart, etc.)
+    - Token management
+    """
+    # First check admin role
+    if not token_info.has_role("admin"):
+        raise HTTPException(
+            status_code=403,
+            detail="Admin role required for this operation"
+        )
+
+    # Then verify IP ACL (skips for super admin and agent tokens)
+    return await verify_ip_acl(request, token_info, db)
+
+
 def verify_agent_access(token_info: TokenInfo, agent_id: str, db: Session):
     """Verify that a token has access to the specified agent."""
     if token_info.is_super_admin:
@@ -1169,7 +1194,7 @@ async def add_allowlist_entry(
     request: Request,
     entry: AllowlistEntryCreate,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Add a new allowlist entry (admin only).
 
@@ -1203,9 +1228,10 @@ async def add_allowlist_entry(
 
 @app.delete("/api/v1/allowlist/{entry_id}")
 async def delete_allowlist_entry(
+    request: Request,
     entry_id: int,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Delete an allowlist entry (admin only)"""
     entry = db.query(AllowlistEntry).filter(AllowlistEntry.id == entry_id).first()
@@ -1225,7 +1251,7 @@ async def update_allowlist_entry(
     enabled: Optional[bool] = None,
     description: Optional[str] = None,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Update an allowlist entry (admin only)"""
     entry = db.query(AllowlistEntry).filter(AllowlistEntry.id == entry_id).first()
@@ -1360,7 +1386,7 @@ async def create_secret(
     request: Request,
     secret: SecretCreate,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Create a new secret (encrypted in database) - admin only.
 
@@ -1407,10 +1433,11 @@ async def create_secret(
 
 @app.post("/api/v1/secrets/{secret_name}/rotate")
 async def rotate_secret(
+    request: Request,
     secret_name: str,
-    request: RotateSecretRequest,
+    body: RotateSecretRequest,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Rotate a secret (admin only)"""
     secret = db.query(Secret).filter(Secret.name == secret_name).first()
@@ -1419,7 +1446,7 @@ async def rotate_secret(
 
     try:
         # Update encrypted value
-        secret.encrypted_value = encrypt_secret(request.new_value)
+        secret.encrypted_value = encrypt_secret(body.new_value)
         secret.last_rotated = datetime.utcnow()
         db.commit()
 
@@ -1448,9 +1475,10 @@ async def get_secret_value(
 
 @app.delete("/api/v1/secrets/{secret_name}")
 async def delete_secret(
+    request: Request,
     secret_name: str,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Delete a secret by name (admin only)."""
     secret = db.query(Secret).filter(Secret.name == secret_name).first()
@@ -1589,9 +1617,10 @@ async def get_rate_limits(
 
 @app.post("/api/v1/rate-limits", response_model=RateLimitResponse)
 async def create_rate_limit(
+    request: Request,
     rate_limit: RateLimitCreate,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Create a new rate limit configuration (admin only).
 
@@ -1620,10 +1649,11 @@ async def create_rate_limit(
 
 @app.put("/api/v1/rate-limits/{rate_limit_id}", response_model=RateLimitResponse)
 async def update_rate_limit(
+    request: Request,
     rate_limit_id: int,
     rate_limit: RateLimitUpdate,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Update a rate limit configuration (admin only)"""
     db_rate_limit = db.query(RateLimit).filter(RateLimit.id == rate_limit_id).first()
@@ -1646,9 +1676,10 @@ async def update_rate_limit(
 
 @app.delete("/api/v1/rate-limits/{rate_limit_id}")
 async def delete_rate_limit(
+    request: Request,
     rate_limit_id: int,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Delete a rate limit configuration (admin only)"""
     db_rate_limit = db.query(RateLimit).filter(RateLimit.id == rate_limit_id).first()
@@ -1845,10 +1876,11 @@ async def agent_heartbeat(
 
 @app.post("/api/v1/agents/{agent_id}/wipe")
 async def queue_agent_wipe(
+    request: Request,
     agent_id: str,
-    request: AgentCommandRequest,
+    body: AgentCommandRequest,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Queue a wipe command for the specified agent (admin only).
 
@@ -1863,14 +1895,14 @@ async def queue_agent_wipe(
         )
 
     state.pending_command = "wipe"
-    state.pending_command_args = json.dumps({"wipe_workspace": request.wipe_workspace})
+    state.pending_command_args = json.dumps({"wipe_workspace": body.wipe_workspace})
     state.pending_command_at = datetime.utcnow()
 
     # Log the wipe request
     log = AuditLog(
         event_type="agent_wipe_requested",
         user=token_info.token_name or "admin",
-        action=f"Wipe requested for {agent_id} (workspace={'wipe' if request.wipe_workspace else 'preserve'})",
+        action=f"Wipe requested for {agent_id} (workspace={'wipe' if body.wipe_workspace else 'preserve'})",
         severity="WARNING"
     )
     db.add(log)
@@ -1885,9 +1917,10 @@ async def queue_agent_wipe(
 
 @app.post("/api/v1/agents/{agent_id}/restart")
 async def queue_agent_restart(
+    request: Request,
     agent_id: str,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Queue a restart command for the specified agent (admin only)."""
     state = get_or_create_agent_state(db, agent_id)
@@ -1911,9 +1944,10 @@ async def queue_agent_restart(
 
 @app.post("/api/v1/agents/{agent_id}/stop")
 async def queue_agent_stop(
+    request: Request,
     agent_id: str,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Queue a stop command for the specified agent (admin only)."""
     state = get_or_create_agent_state(db, agent_id)
@@ -1937,9 +1971,10 @@ async def queue_agent_stop(
 
 @app.post("/api/v1/agents/{agent_id}/start")
 async def queue_agent_start(
+    request: Request,
     agent_id: str,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Queue a start command for the specified agent (admin only)."""
     state = get_or_create_agent_state(db, agent_id)
@@ -2003,9 +2038,10 @@ async def get_agent_status(
 
 @app.post("/api/v1/agents/{agent_id}/approve")
 async def approve_agent(
+    request: Request,
     agent_id: str,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Approve an agent to connect to the control plane."""
     state = db.query(AgentState).filter(
@@ -2041,9 +2077,10 @@ async def approve_agent(
 
 @app.post("/api/v1/agents/{agent_id}/reject")
 async def reject_agent(
+    request: Request,
     agent_id: str,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Reject and soft-delete a pending agent."""
     state = db.query(AgentState).filter(
@@ -2072,9 +2109,10 @@ async def reject_agent(
 
 @app.post("/api/v1/agents/{agent_id}/revoke")
 async def revoke_agent(
+    request: Request,
     agent_id: str,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Revoke approval for an agent (set approved=False)."""
     state = db.query(AgentState).filter(
@@ -2770,59 +2808,60 @@ async def list_tokens(
 
 @app.post("/api/v1/tokens", response_model=ApiTokenCreatedResponse)
 async def create_token(
-    request: ApiTokenCreate,
+    request: Request,
+    body: ApiTokenCreate,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Create a new API token (admin only).
 
     The token value is returned only once - save it securely!
     """
     # Validate token type
-    if request.token_type not in ["admin", "agent"]:
+    if body.token_type not in ["admin", "agent"]:
         raise HTTPException(
             status_code=400,
             detail="token_type must be 'admin' or 'agent'"
         )
 
     # Agent tokens require agent_id
-    if request.token_type == "agent" and not request.agent_id:
+    if body.token_type == "agent" and not body.agent_id:
         raise HTTPException(
             status_code=400,
             detail="agent_id is required for agent tokens"
         )
 
     # Admin tokens should not have agent_id
-    if request.token_type == "admin" and request.agent_id:
+    if body.token_type == "admin" and body.agent_id:
         raise HTTPException(
             status_code=400,
             detail="admin tokens should not have an agent_id"
         )
 
     # Only super admins can create super admin tokens
-    if request.is_super_admin and not token_info.is_super_admin:
+    if body.is_super_admin and not token_info.is_super_admin:
         raise HTTPException(
             status_code=403,
             detail="Only super admins can create super admin tokens"
         )
 
     # Determine tenant_id for the new token
-    new_tenant_id = request.tenant_id
-    if request.token_type == "agent" and request.agent_id:
+    new_tenant_id = body.tenant_id
+    if body.token_type == "agent" and body.agent_id:
         # For agent tokens, try to get tenant from the agent (if it exists)
         # Allow pre-provisioning tokens for agents that don't exist yet
         agent = db.query(AgentState).filter(
-            AgentState.agent_id == request.agent_id,
+            AgentState.agent_id == body.agent_id,
             AgentState.deleted_at.is_(None)
         ).first()
         if agent:
             new_tenant_id = agent.tenant_id
-    elif not request.is_super_admin and not new_tenant_id:
+    elif not body.is_super_admin and not new_tenant_id:
         # Non-super-admin tokens default to creator's tenant
         new_tenant_id = token_info.tenant_id
 
     # Check for duplicate name
-    existing = db.query(ApiToken).filter(ApiToken.name == request.name).first()
+    existing = db.query(ApiToken).filter(ApiToken.name == body.name).first()
     if existing:
         raise HTTPException(status_code=400, detail="Token with this name already exists")
 
@@ -2832,12 +2871,12 @@ async def create_token(
 
     # Calculate expiry
     expires_at = None
-    if request.expires_in_days:
-        expires_at = datetime.utcnow() + timedelta(days=request.expires_in_days)
+    if body.expires_in_days:
+        expires_at = datetime.utcnow() + timedelta(days=body.expires_in_days)
 
     # Validate roles
     valid_roles = {"admin", "developer"}
-    requested_roles = set(r.strip() for r in (request.roles or "admin").split(","))
+    requested_roles = set(r.strip() for r in (body.roles or "admin").split(","))
     invalid_roles = requested_roles - valid_roles
     if invalid_roles:
         raise HTTPException(
@@ -2848,12 +2887,12 @@ async def create_token(
 
     # Create token record
     db_token = ApiToken(
-        name=request.name,
+        name=body.name,
         token_hash=token_hash_value,
-        token_type=request.token_type,
-        agent_id=request.agent_id,
+        token_type=body.token_type,
+        agent_id=body.agent_id,
         tenant_id=new_tenant_id,
-        is_super_admin=request.is_super_admin,
+        is_super_admin=body.is_super_admin,
         roles=roles_str,
         expires_at=expires_at
     )
@@ -2863,8 +2902,8 @@ async def create_token(
     log = AuditLog(
         event_type="token_created",
         user=token_info.token_name or "admin",
-        action=f"Token '{request.name}' created (type={request.token_type}, roles={roles_str}, super_admin={request.is_super_admin})",
-        details=f"agent_id={request.agent_id}, tenant_id={new_tenant_id}" if request.agent_id else f"tenant_id={new_tenant_id}",
+        action=f"Token '{body.name}' created (type={body.token_type}, roles={roles_str}, super_admin={body.is_super_admin})",
+        details=f"agent_id={body.agent_id}, tenant_id={new_tenant_id}" if body.agent_id else f"tenant_id={new_tenant_id}",
         severity="INFO"
     )
     db.add(log)
@@ -2886,9 +2925,10 @@ async def create_token(
 
 @app.delete("/api/v1/tokens/{token_id}")
 async def delete_token(
+    request: Request,
     token_id: int,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Delete an API token (admin only)."""
     db_token = db.query(ApiToken).filter(ApiToken.id == token_id).first()

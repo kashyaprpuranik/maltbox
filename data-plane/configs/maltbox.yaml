@@ -1,0 +1,119 @@
+# =============================================================================
+# Maltbox Data Plane Configuration
+# =============================================================================
+# Single source of truth for:
+#   - Domain allowlist (generates CoreDNS + Envoy configs)
+#   - Credentials for secret injection
+#   - Rate limits
+#   - Aliases (*.devbox.local shortcuts)
+#
+# Changes to this file auto-regenerate CoreDNS and Envoy configs.
+# =============================================================================
+
+# Operation mode: 'standalone' or 'connected'
+# - standalone: Use only this config file
+# - connected: Sync from control plane, use this as fallback
+mode: standalone
+
+# Upstream DNS servers for resolving allowed domains
+dns:
+  upstream:
+    - 8.8.8.8
+    - 8.8.4.4
+  cache_ttl: 300  # seconds
+
+# Default rate limit for domains without specific limits
+rate_limits:
+  default:
+    requests_per_minute: 120
+    burst_size: 20
+
+# =============================================================================
+# Domain Allowlist
+# =============================================================================
+# Each domain entry can have:
+#   - domain: required, the domain pattern (supports wildcards like *.github.com)
+#   - alias: optional, creates {alias}.devbox.local shortcut
+#   - credential: optional, injects auth header for this domain
+#   - rate_limit: optional, per-domain rate limiting
+#   - timeout: optional, request timeout (default: 30s)
+#   - read_only: optional, block POST/PUT/DELETE methods
+#   - tls: optional, use HTTPS upstream (default: true for port 443)
+# =============================================================================
+
+domains:
+  # -------------------------------------------------------------------------
+  # AI APIs
+  # -------------------------------------------------------------------------
+  - domain: api.openai.com
+    alias: openai
+    timeout: 120s
+    rate_limit:
+      requests_per_minute: 60
+      burst_size: 10
+    # credential:
+    #   header: Authorization
+    #   format: "Bearer {value}"
+    #   env: OPENAI_API_KEY
+
+  - domain: api.anthropic.com
+    alias: anthropic
+    timeout: 120s
+    rate_limit:
+      requests_per_minute: 60
+      burst_size: 10
+    # credential:
+    #   header: x-api-key
+    #   format: "{value}"
+    #   env: ANTHROPIC_API_KEY
+
+  # -------------------------------------------------------------------------
+  # GitHub
+  # -------------------------------------------------------------------------
+  - domain: github.com
+  - domain: api.github.com
+    alias: github
+    timeout: 30s
+    # credential:
+    #   header: Authorization
+    #   format: "token {value}"
+    #   env: GITHUB_TOKEN
+  - domain: raw.githubusercontent.com
+  - domain: objects.githubusercontent.com
+  - domain: gist.githubusercontent.com
+  - domain: codeload.github.com
+
+  # -------------------------------------------------------------------------
+  # Python Package Index (read-only)
+  # -------------------------------------------------------------------------
+  - domain: pypi.org
+    read_only: true
+  - domain: files.pythonhosted.org
+    read_only: true
+
+  # -------------------------------------------------------------------------
+  # HuggingFace (large model downloads)
+  # -------------------------------------------------------------------------
+  - domain: huggingface.co
+    alias: huggingface
+    timeout: 300s
+  - domain: cdn-lfs.huggingface.co
+    timeout: 600s
+
+  # -------------------------------------------------------------------------
+  # npm Registry (read-only)
+  # -------------------------------------------------------------------------
+  - domain: registry.npmjs.org
+    read_only: true
+  - domain: registry.yarnpkg.com
+    read_only: true
+
+# =============================================================================
+# Internal Services (Docker DNS)
+# =============================================================================
+# These resolve via Docker's internal DNS (127.0.0.11)
+internal_services:
+  - control-plane-api
+  - envoy
+  - dns-filter
+  - vector

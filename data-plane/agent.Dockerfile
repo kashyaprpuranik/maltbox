@@ -168,6 +168,20 @@ RUN mkdir -p /workspace && chown $USER_NAME:$USER_NAME /workspace
 WORKDIR /workspace
 
 # =============================================================================
+# Persistent Sessions (tmux)
+# =============================================================================
+# Tmux configuration
+COPY configs/agent/tmux.conf /etc/tmux.conf
+
+# Auto-attach to tmux on SSH login
+COPY configs/agent/profile.d/tmux-session.sh /etc/profile.d/99-tmux-session.sh
+RUN chmod +x /etc/profile.d/99-tmux-session.sh
+
+# Session management helper
+COPY configs/agent/bin/session /usr/local/bin/session
+RUN chmod +x /usr/local/bin/session
+
+# =============================================================================
 # Entrypoint
 # =============================================================================
 COPY agent-entrypoint.sh /usr/local/bin/entrypoint.sh

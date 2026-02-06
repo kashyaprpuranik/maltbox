@@ -1,4 +1,4 @@
-# AI Devbox - Control Plane
+# Maltbox - Control Plane
 
 The control plane provides centralized management, policy enforcement, secrets storage, and observability for the AI Devbox platform.
 

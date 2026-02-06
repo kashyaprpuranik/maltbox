@@ -1,0 +1,114 @@
+#!/bin/bash
+# =============================================================================
+# session - Manage persistent tmux sessions
+# =============================================================================
+
+set -e
+
+TMUX_SOCKET_DIR="/workspace/.tmux"
+export TMUX_TMPDIR="$TMUX_SOCKET_DIR"
+
+usage() {
+    cat <<EOF
+Usage: session <command> [options]
+
+Commands:
+  list, ls          List all sessions
+  new <name>        Create a new session
+  attach, a <name>  Attach to a session (default: main)
+  kill <name>       Kill a session
+  kill-all          Kill all sessions
+  info              Show tmux info and socket location
+
+Examples:
+  session ls                    # List sessions
+  session new dev               # Create 'dev' session
+  session attach dev            # Attach to 'dev'
+  session a                     # Attach to 'main' (default)
+  session kill dev              # Kill 'dev' session
+
+EOF
+}
+
+cmd_list() {
+    echo "Active sessions:"
+    tmux list-sessions 2>/dev/null || echo "  (no sessions)"
+}
+
+cmd_new() {
+    local name="${1:-main}"
+    if tmux has-session -t "$name" 2>/dev/null; then
+        echo "Session '$name' already exists. Attaching..."
+        exec tmux attach-session -t "$name"
+    else
+        echo "Creating session: $name"
+        exec tmux new-session -s "$name"
+    fi
+}
+
+cmd_attach() {
+    local name="${1:-main}"
+    if tmux has-session -t "$name" 2>/dev/null; then
+        exec tmux attach-session -t "$name"
+    else
+        echo "Session '$name' not found. Creating..."
+        exec tmux new-session -s "$name"
+    fi
+}
+
+cmd_kill() {
+    local name="$1"
+    if [ -z "$name" ]; then
+        echo "Error: session name required"
+        exit 1
+    fi
+    tmux kill-session -t "$name" && echo "Killed session: $name"
+}
+
+cmd_kill_all() {
+    echo "Killing all sessions..."
+    tmux kill-server 2>/dev/null && echo "All sessions killed" || echo "No sessions to kill"
+}
+
+cmd_info() {
+    echo "Tmux Session Manager"
+    echo "===================="
+    echo "Socket directory: $TMUX_SOCKET_DIR"
+    echo "Config file: ~/.tmux.conf"
+    echo ""
+    echo "Sessions persist across:"
+    echo "  - SSH disconnects"
+    echo "  - Container restarts (workspace volume)"
+    echo ""
+    cmd_list
+}
+
+# Main
+case "${1:-}" in
+    list|ls)
+        cmd_list
+        ;;
+    new)
+        cmd_new "$2"
+        ;;
+    attach|a)
+        cmd_attach "$2"
+        ;;
+    kill)
+        cmd_kill "$2"
+        ;;
+    kill-all)
+        cmd_kill_all
+        ;;
+    info)
+        cmd_info
+        ;;
+    -h|--help|help|"")
+        usage
+        ;;
+    *)
+        echo "Unknown command: $1"
+        usage
+        exit 1
+        ;;
+esac

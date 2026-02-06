@@ -1,4 +1,4 @@
-# AI Devbox
+# Maltbox
 
 Secure development environment for AI agents with isolated networking and centralized control.
 
@@ -89,15 +89,21 @@ Secure development environment for AI agents with isolated networking and centra
 
 ### Standalone Mode
 
-Run the data plane without a control plane. Uses static configuration files.
+Run the data plane without a control plane. Uses local admin UI for management.
 
 ```bash
 cd data-plane
 
-docker-compose up -d
+# Start with local admin UI
+docker-compose --profile admin up -d
 
-# Allowlist: configs/coredns/allowlist.hosts
-# Secrets: environment variables or configs/envoy/envoy.yaml
+# Access local admin at http://localhost:8080
+# Features:
+#   - Structured config editor (domains, rate limits, credentials)
+#   - Container status with health checks
+#   - Log viewer with traffic analytics
+#   - Browser-based web terminal
+#   - SSH tunnel setup
 ```
 
 ### Connected Mode
@@ -161,20 +167,27 @@ See [control-plane/README.md](control-plane/README.md#web-terminal) and [data-pl
 
 | Feature | Description |
 |---------|-------------|
-| **Admin UI** | Web console for managing agents, secrets, allowlists |
-| **Web Terminal** | Browser-based SSH access to agents (xterm.js) |
+| **Admin UI** | Web console for managing agents, secrets, allowlists (both modes) |
+| **Web Terminal** | Browser-based shell access to agents (xterm.js) in both modes |
+| **Local Admin UI** | Standalone mode management with structured config editor |
 | **Multi-Agent Support** | Manage multiple data planes from a single control plane |
 | **Agent Control** | Start/stop/restart/wipe agent containers from UI |
 | **Domain Allowlist** | Only approved domains can be accessed (synced to CoreDNS) |
 | **Egress Proxy** | All HTTP(S) traffic routed through Envoy with logging |
 | **Credential Injection** | API keys injected by proxy, never exposed to agent |
 | **Domain Aliases** | Use `*.devbox.local` shortcuts (e.g., `openai.devbox.local`) |
+| **Unified Config** | Single `maltbox.yaml` generates CoreDNS and Envoy configs |
+| **Config Validation** | Form-based editor with domain/CIDR validation |
+| **Health Checks** | DNS resolution, Envoy ready status monitoring |
+| **Traffic Analytics** | Requests/sec, top domains, error rates in log viewer |
 | **Centralized Logging** | All agent activity logged to OpenObserve (Vector collector) |
 | **Secret Management** | Encrypted secrets in Postgres (Fernet/AES) |
 | **Rate Limiting** | Per-domain rate limits to control API usage |
+| **IP ACLs** | Restrict control plane access by IP range per tenant |
 | **Audit Logs** | Full audit trail of all actions |
 | **RBAC** | Role-based access control (admin, developer roles) |
 | **STCP Tunnels** | Secure tunnels via single port (no port-per-agent allocation) |
+| **Auto-STCP Setup** | Configure SSH tunnels from local admin UI |
 | **gVisor Isolation** | Optional kernel-level syscall isolation (`CONTAINER_RUNTIME=runsc`) |
 | **IPv6 Disabled** | Prevents bypass of IPv4 egress controls |
 
@@ -187,20 +200,23 @@ See [control-plane/README.md](control-plane/README.md#web-terminal) and [data-pl
 │   ├── configs/
 │   │   └── frps/               # FRP server config (STCP tunnels)
 │   └── services/
-│       ├── control-plane/      # Control plane API (secrets, allowlist, audit)
-│       └── admin-ui/           # React admin console
+│       ├── control-plane/      # Control plane API (secrets, allowlist, audit, IP ACLs)
+│       └── admin-ui/           # React admin console with web terminal
 │
 └── data-plane/
     ├── docker-compose.yml          # Data plane services
-    ├── run.sh                      # Launcher (--gvisor, --ssh, --auditing)
     ├── configs/
-    │   ├── coredns/            # DNS allowlist
-    │   ├── envoy/              # Proxy + credential injection (Lua filter)
+    │   ├── maltbox.yaml        # Unified config (generates CoreDNS + Envoy)
+    │   ├── coredns/            # DNS config (generated from maltbox.yaml)
+    │   ├── envoy/              # Proxy config (generated from maltbox.yaml)
     │   ├── vector/             # Log collection & forwarding
-    │   ├── gvisor/             # gVisor runtime config
     │   └── frpc/               # FRP client config (STCP tunnels)
     ├── services/
-    │   └── agent-manager/      # Manages agent container lifecycle
+    │   ├── agent-manager/      # Container lifecycle + config generation
+    │   ├── local-admin/        # Local admin UI (standalone mode)
+    │   │   ├── frontend/       # React app with web terminal
+    │   │   └── backend/        # FastAPI backend
+    │   └── config-generator/   # maltbox.yaml → CoreDNS/Envoy configs
     └── tests/                  # Unit and E2E tests
 ```
 

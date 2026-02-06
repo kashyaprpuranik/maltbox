@@ -711,11 +711,18 @@ def seed_tokens(db: Session):
     # Well-known test tokens (deterministic for testing)
     test_tokens = [
         {
+            "name": "super-admin-token",
+            "raw_token": "super-admin-test-token-do-not-use-in-production",
+            "token_type": "admin",
+            "roles": "admin",
+            "is_super_admin": True,
+        },
+        {
             "name": "admin-token",
             "raw_token": "admin-test-token-do-not-use-in-production",
             "token_type": "admin",
             "roles": "admin",
-            "is_super_admin": True,
+            "is_super_admin": False,
         },
         {
             "name": "dev-token",

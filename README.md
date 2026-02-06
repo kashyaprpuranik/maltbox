@@ -318,7 +318,8 @@ The following tokens are automatically seeded for development:
 
 | Token Name | Raw Token | Role | Super Admin |
 |------------|-----------|------|-------------|
-| `admin-token` | `admin-test-token-do-not-use-in-production` | admin | Yes |
+| `super-admin-token` | `super-admin-test-token-do-not-use-in-production` | admin | Yes |
+| `admin-token` | `admin-test-token-do-not-use-in-production` | admin | No |
 | `dev-token` | `dev-test-token-do-not-use-in-production` | developer | No |
 
 ### Creating API Tokens

@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   KeyRound,
@@ -9,8 +9,11 @@ import {
   ScrollText,
   Settings,
   Building2,
+  LogOut,
+  ExternalLink,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { api } from '../api/client';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -18,14 +21,21 @@ const navItems = [
   { to: '/allowlist', icon: Shield, label: 'Allowlist' },
   { to: '/rate-limits', icon: Gauge, label: 'Rate Limits' },
   { to: '/tokens', icon: Key, label: 'API Tokens' },
-  { to: '/tenants', icon: Building2, label: 'Tenants' },
+  { to: '/tenants', icon: Building2, label: 'Tenants', superAdminOnly: true },
   { to: '/admin-logs', icon: FileText, label: 'Admin Logs' },
   { to: '/agent-logs', icon: ScrollText, label: 'Agent Logs' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 
 export function Sidebar() {
-  const { user } = useAuth();
+  const { user, refresh } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    api.clearToken();
+    refresh();
+    navigate('/login');
+  };
 
   return (
     <aside className="w-64 bg-dark-900 border-r border-dark-700 flex flex-col">
@@ -34,7 +44,9 @@ export function Sidebar() {
         <p className="text-sm text-dark-500">Admin Console</p>
       </div>
       <nav className="flex-1 p-4 space-y-1">
-        {navItems.map(({ to, icon: Icon, label }) => (
+        {navItems
+          .filter(item => !item.superAdminOnly || user?.is_super_admin)
+          .map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}
@@ -51,18 +63,26 @@ export function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      {user?.is_super_admin && (
-        <div className="p-4 border-t border-dark-700">
+      <div className="p-4 border-t border-dark-700 space-y-2">
+        {user?.is_super_admin && (
           <a
             href="/openobserve/"
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-2 text-sm text-dark-500 hover:text-dark-300"
           >
-            Open OpenObserve
+            <ExternalLink size={16} />
+            OpenObserve
           </a>
-        </div>
-      )}
+        )}
+        <button
+          onClick={handleLogout}
+          className="flex items-center gap-2 text-sm text-dark-500 hover:text-dark-300 w-full"
+        >
+          <LogOut size={16} />
+          Logout
+        </button>
+      </div>
     </aside>
   );
 }

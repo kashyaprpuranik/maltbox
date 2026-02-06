@@ -204,103 +204,11 @@ See [control-plane/README.md](control-plane/README.md#web-terminal) and [data-pl
 
 ## Configuration
 
-### Adding Allowed Domains
-
-Domains can be managed via the Admin UI (http://localhost:9080) or API:
-```bash
-# Add domain via API
-curl -X POST http://localhost:8002/api/v1/allowlist \
-  -H "Authorization: Bearer dev-token" \
-  -H "Content-Type: application/json" \
-  -d '{"entry_type": "domain", "value": "api.openai.com", "description": "OpenAI API"}'
-```
-
-The agent-manager syncs the allowlist from the control plane to CoreDNS every 5 minutes.
-A static fallback allowlist is available at `data-plane/configs/coredns/allowlist.hosts` for when the control plane is unreachable.
-
-### Adding Secrets (Domain-Scoped)
-
-Secrets are scoped to specific domains. Envoy's Lua filter automatically injects the correct credential based on the request destination.
-
-**Domain Aliases**: You can optionally set an `alias` to create a `*.devbox.local` shortcut. For example, `alias: "openai"` allows the agent to use `http://openai.devbox.local` instead of the real domain - Envoy resolves the alias and injects credentials automatically.
-
-Via Admin UI (http://localhost:9080) or API:
-```bash
-# OpenAI API key (with alias)
-curl -X POST http://localhost:8002/api/v1/secrets \
-  -H "Authorization: Bearer dev-token" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "OPENAI_API_KEY",
-    "value": "sk-...",
-    "domain_pattern": "api.openai.com",
-    "alias": "openai",
-    "header_name": "Authorization",
-    "header_format": "Bearer {value}",
-    "description": "OpenAI API key"
-  }'
-# Agent can now use: curl http://openai.devbox.local/v1/models
-
-# GitHub token (wildcard domain)
-curl -X POST http://localhost:8002/api/v1/secrets \
-  -H "Authorization: Bearer dev-token" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "GITHUB_TOKEN",
-    "value": "ghp_...",
-    "domain_pattern": "*.github.com",
-    "alias": "github",
-    "header_name": "Authorization",
-    "header_format": "token {value}"
-  }'
-
-# Anthropic API key
-curl -X POST http://localhost:8002/api/v1/secrets \
-  -H "Authorization: Bearer dev-token" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "ANTHROPIC_API_KEY",
-    "value": "sk-ant-...",
-    "domain_pattern": "api.anthropic.com",
-    "alias": "anthropic",
-    "header_name": "x-api-key",
-    "header_format": "{value}"
-  }'
-```
-
-### Agent Management
-
-Via Admin UI dashboard or API. Agent ID is set via `AGENT_ID` environment variable in the data plane (defaults to "default").
-
-```bash
-# List all connected agents
-curl http://localhost:8002/api/v1/agents \
-  -H "Authorization: Bearer dev-token"
-
-# Get agent status
-curl http://localhost:8002/api/v1/agents/default/status \
-  -H "Authorization: Bearer dev-token"
-
-# Wipe agent (preserves workspace)
-curl -X POST http://localhost:8002/api/v1/agents/default/wipe \
-  -H "Authorization: Bearer dev-token" \
-  -H "Content-Type: application/json" \
-  -d '{"wipe_workspace": false}'
-
-# Wipe agent and workspace
-curl -X POST http://localhost:8002/api/v1/agents/default/wipe \
-  -H "Authorization: Bearer dev-token" \
-  -H "Content-Type: application/json" \
-  -d '{"wipe_workspace": true}'
-
-# Stop/Start/Restart agent
-curl -X POST http://localhost:8002/api/v1/agents/default/stop \
-  -H "Authorization: Bearer dev-token"
-curl -X POST http://localhost:8002/api/v1/agents/default/start \
-  -H "Authorization: Bearer dev-token"
-curl -X POST http://localhost:8002/api/v1/agents/default/restart \
-  -H "Authorization: Bearer dev-token"
-```
+See [docs/configuration.md](docs/configuration.md) for detailed configuration including:
+- Adding allowed domains
+- Adding secrets (domain-scoped, with aliases)
+- Agent management commands
+- Per-agent configuration (agent-specific secrets, allowlists, rate limits)
 
 ## Authentication & API Tokens
 
@@ -404,74 +312,6 @@ This creates:
 - `dev-token` - Developer role token (terminal access)
 - Sample allowlist entries and rate limits (both global and agent-specific)
 
-## Per-Agent Configuration
-
-You can create agent-specific secrets, allowlist entries, and rate limits that only apply to a particular agent. Global entries (without `agent_id`) apply to all agents.
-
-### How it works
-
-- **Global entries** (`agent_id` = null): Apply to all agents
-- **Agent-specific entries** (`agent_id` = "my-agent"): Only apply to that agent
-- **Precedence**: Agent-specific entries take precedence over global entries for the same domain
-
-### Creating agent-specific configuration
-
-```bash
-# Agent-specific allowlist entry
-curl -X POST http://localhost:8002/api/v1/allowlist \
-  -H "Authorization: Bearer admin-token" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "entry_type": "domain",
-    "value": "internal-api.example.com",
-    "description": "Internal API for prod-agent only",
-    "agent_id": "prod-agent"
-  }'
-
-# Agent-specific secret
-curl -X POST http://localhost:8002/api/v1/secrets \
-  -H "Authorization: Bearer admin-token" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "PROD_API_KEY",
-    "value": "sk-prod-...",
-    "domain_pattern": "api.example.com",
-    "header_name": "Authorization",
-    "header_format": "Bearer {value}",
-    "agent_id": "prod-agent"
-  }'
-
-# Agent-specific rate limit (overrides global rate limit)
-curl -X POST http://localhost:8002/api/v1/rate-limits \
-  -H "Authorization: Bearer admin-token" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "domain_pattern": "api.openai.com",
-    "requests_per_minute": 120,
-    "burst_size": 20,
-    "description": "Higher limit for prod-agent",
-    "agent_id": "prod-agent"
-  }'
-```
-
-### Agent token scoping
-
-Agent tokens only see configuration for their assigned agent plus global configuration:
-
-```bash
-# Create agent token
-curl -X POST http://localhost:8002/api/v1/tokens \
-  -H "Authorization: Bearer admin-token" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "prod-token", "token_type": "agent", "agent_id": "prod-agent"}'
-
-# Using the agent token to fetch secrets
-# - Returns prod-agent's secrets + global secrets
-# - Does NOT return other agents' secrets
-curl http://localhost:8002/api/v1/secrets/for-domain?domain=api.example.com \
-  -H "Authorization: Bearer <prod-agent-token>"
-```
-
 ## Testing
 
 ### Control Plane Tests
@@ -504,24 +344,7 @@ pytest tests/test_e2e.py -v
 
 ## Roadmap
 
-### Completed
-- [x] Multi-data plane support (multiple agents per control plane)
-- [x] Allowlist sync from control plane to CoreDNS
-- [x] Agent registration (approve/reject new agents, revoke access)
-- [x] API token management (generate, delete, enable/disable tokens via UI)
-- [x] Per-agent configuration (different allowlists/secrets/rate-limits per agent)
-- [x] Multi-tenancy (isolated tenant workspaces)
-- [x] Rate limiting on CP API (slowapi + Redis)
-- [x] Centralized logging (Vector → OpenObserve)
-- [x] gVisor kernel isolation (optional, `CONTAINER_RUNTIME=runsc`)
-- [x] IPv6 disabled (prevent egress control bypass)
-- [x] SSH access via FRP tunnels (STCP mode)
-- [x] Web terminal in Admin UI (xterm.js)
-- [x] RBAC (admin/developer roles)
-
-### Planned
-- [ ] TLS between data plane and control plane
-- [ ] mTLS for DP→CP communication (step-ca)
+- [ ] mTLS for data plane ↔ control plane communication (step-ca)
 - [ ] Package registry proxy/allowlist (npm, pip, cargo)
 - [ ] Alert rules for security events (gVisor syscall denials, rate limit hits)
 

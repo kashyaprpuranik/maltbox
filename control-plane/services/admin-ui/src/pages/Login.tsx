@@ -1,12 +1,23 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { KeyRound } from 'lucide-react';
 import { Button, Input } from '../components/common';
 import { api } from '../api/client';
+import { useAuth } from '../contexts/AuthContext';
 
 export function Login() {
   const [token, setToken] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const { user, loading: authLoading } = useAuth();
+  const navigate = useNavigate();
+
+  // Redirect to dashboard if already authenticated
+  useEffect(() => {
+    if (!authLoading && user && api.getToken()) {
+      navigate('/', { replace: true });
+    }
+  }, [user, authLoading, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -17,8 +28,10 @@ export function Login() {
       // Save token and test with an authenticated endpoint
       api.setToken(token);
       await api.getDataPlanes();
-      // If we get here, token is valid - reload to dashboard
-      window.location.href = './';
+      // If we get here, token is valid - navigate to dashboard
+      navigate('/', { replace: true });
+      // Force a page reload to refresh auth context
+      window.location.reload();
     } catch {
       setError('Invalid token or API unreachable');
       api.clearToken();

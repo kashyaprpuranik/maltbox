@@ -200,6 +200,24 @@ All connections are outbound from data plane - no inbound ports needed on data p
 | POST | `/api/v1/tenants` | Create new tenant (super admin only) |
 | DELETE | `/api/v1/tenants/{id}` | Delete tenant (super admin only) |
 
+### IP Access Control (IP ACLs)
+
+Restrict control plane access to specific IP ranges per tenant.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/tenants/{tenant_id}/ip-acls` | List IP ACLs for tenant |
+| POST | `/api/v1/tenants/{tenant_id}/ip-acls` | Create IP ACL entry |
+| PATCH | `/api/v1/tenants/{tenant_id}/ip-acls/{acl_id}` | Update IP ACL entry |
+| DELETE | `/api/v1/tenants/{tenant_id}/ip-acls/{acl_id}` | Delete IP ACL entry |
+
+**How IP ACLs work:**
+- If no IP ACLs are configured for a tenant, all IPs are allowed (default)
+- Once any ACL is added, only matching IPs can access the control plane
+- Super admins always bypass IP restrictions
+- Agent tokens (used by data planes) are not affected by IP ACLs
+- CIDR notation: use `/32` for single IP, `/24` for subnet, etc.
+
 ### Agent Approval
 
 | Method | Endpoint | Description |
@@ -218,21 +236,39 @@ curl -H "Authorization: Bearer your-token" http://localhost:8002/api/v1/secrets
 
 ### Token Types & Roles
 
-| Type | Role | Access |
-|------|------|--------|
-| `admin` | `admin` | Full API access (secrets, allowlist, agents, tokens, rate-limits, audit-logs) |
-| `admin` | `developer` | Read access + web terminal access |
-| `agent` | - | Heartbeat, secrets/for-domain, rate-limits/for-domain (scoped to agent_id) |
+| Type | Role | Super Admin | Access |
+|------|------|-------------|--------|
+| `admin` | `admin` | Yes | **All access** - tenants, all endpoints, OpenObserve link |
+| `admin` | `admin` | No | **Tenant admin** - secrets, allowlist, agents, tokens, rate-limits, IP ACLs, audit-logs (tenant-scoped) |
+| `admin` | `developer` | No | **Developer** - dashboard, agent logs, web terminal, settings only |
+| `agent` | - | No | **Data plane** - heartbeat, secrets/for-domain, rate-limits/for-domain (agent-scoped) |
+
+**UI Access by Role:**
+
+| Page | Super Admin | Admin | Developer |
+|------|-------------|-------|-----------|
+| Dashboard | ✓ | ✓ | ✓ |
+| Secrets | ✓ | ✓ | ✗ |
+| Allowlist | ✓ | ✓ | ✗ |
+| Rate Limits | ✓ | ✓ | ✗ |
+| IP ACLs | ✓ | ✓ | ✗ |
+| API Tokens | ✓ | ✓ | ✗ |
+| Tenants | ✓ | ✗ | ✗ |
+| Admin Logs | ✓ | ✓ | ✗ |
+| Agent Logs | ✓ | ✓ | ✓ |
+| Settings | ✓ | ✓ | ✓ |
+| Web Terminal | ✓ | ✓ | ✓ |
+| OpenObserve Link | ✓ | ✗ | ✗ |
 
 ### Default Development Tokens
 
-The following tokens are automatically seeded:
+The following tokens are automatically seeded for development:
 
-| Token Name | Raw Token | Role | Super Admin |
-|------------|-----------|------|-------------|
-| `super-admin-token` | `super-admin-test-token-do-not-use-in-production` | admin | Yes |
-| `admin-token` | `admin-test-token-do-not-use-in-production` | admin | No |
-| `dev-token` | `dev-test-token-do-not-use-in-production` | developer | No |
+| Token Name | Raw Token | Role | Super Admin | Tenant |
+|------------|-----------|------|-------------|--------|
+| `super-admin-token` | `super-admin-test-token-do-not-use-in-production` | admin | Yes | All |
+| `admin-token` | `admin-test-token-do-not-use-in-production` | admin | No | default |
+| `dev-token` | `dev-test-token-do-not-use-in-production` | developer | No | default |
 
 ### Token Sources
 
@@ -309,6 +345,22 @@ Each tenant has a virtual `__default__` agent that holds tenant-wide defaults. C
 ```
 
 Tenants are organizational units. Each tenant automatically gets a `__default__` agent for tenant-global configuration.
+
+### Tenant IP ACL
+
+```json
+{
+  "id": 1,
+  "tenant_id": 1,
+  "cidr": "192.168.1.0/24",
+  "description": "Office network",
+  "enabled": true,
+  "created_at": "2024-01-15T10:30:00Z",
+  "created_by": "admin-token"
+}
+```
+
+IP ACLs restrict which IP addresses can access the control plane for a given tenant. Uses CIDR notation for IP ranges.
 
 ### Secret
 

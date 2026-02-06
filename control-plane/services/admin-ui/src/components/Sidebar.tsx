@@ -11,18 +11,29 @@ import {
   Building2,
   LogOut,
   ExternalLink,
+  Network,
+  LucideIcon,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../api/client';
 
-const navItems = [
+interface NavItem {
+  to: string;
+  icon: LucideIcon;
+  label: string;
+  superAdminOnly?: boolean;
+  adminOnly?: boolean;  // Requires admin role (not developer)
+}
+
+const navItems: NavItem[] = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/secrets', icon: KeyRound, label: 'Secrets' },
-  { to: '/allowlist', icon: Shield, label: 'Allowlist' },
-  { to: '/rate-limits', icon: Gauge, label: 'Rate Limits' },
-  { to: '/tokens', icon: Key, label: 'API Tokens' },
+  { to: '/secrets', icon: KeyRound, label: 'Secrets', adminOnly: true },
+  { to: '/allowlist', icon: Shield, label: 'Allowlist', adminOnly: true },
+  { to: '/rate-limits', icon: Gauge, label: 'Rate Limits', adminOnly: true },
+  { to: '/ip-acls', icon: Network, label: 'IP ACLs', adminOnly: true },
+  { to: '/tokens', icon: Key, label: 'API Tokens', adminOnly: true },
   { to: '/tenants', icon: Building2, label: 'Tenants', superAdminOnly: true },
-  { to: '/admin-logs', icon: FileText, label: 'Admin Logs' },
+  { to: '/admin-logs', icon: FileText, label: 'Admin Logs', adminOnly: true },
   { to: '/agent-logs', icon: ScrollText, label: 'Agent Logs' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
@@ -37,16 +48,28 @@ export function Sidebar() {
     navigate('/login');
   };
 
+  // Check if user has admin role
+  const hasAdminRole = user?.is_super_admin || user?.roles?.includes('admin');
+
+  // Filter nav items based on user roles
+  const filteredNavItems = navItems.filter(item => {
+    // Super admin only items
+    if (item.superAdminOnly && !user?.is_super_admin) return false;
+    // Admin only items (requires admin role, not just developer)
+    if (item.adminOnly && !hasAdminRole) return false;
+    return true;
+  });
+
   return (
     <aside className="w-64 bg-dark-900 border-r border-dark-700 flex flex-col">
       <div className="p-4 border-b border-dark-700">
         <h1 className="text-xl font-bold text-dark-100">Maltbox</h1>
-        <p className="text-sm text-dark-500">Admin Console</p>
+        <p className="text-sm text-dark-500">
+          {user?.is_super_admin ? 'Super Admin' : hasAdminRole ? 'Admin' : 'Developer'}
+        </p>
       </div>
       <nav className="flex-1 p-4 space-y-1">
-        {navItems
-          .filter(item => !item.superAdminOnly || user?.is_super_admin)
-          .map(({ to, icon: Icon, label }) => (
+        {filteredNavItems.map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}

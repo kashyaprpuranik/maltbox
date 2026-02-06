@@ -8,6 +8,8 @@ import type {
   UpdateRateLimitRequest,
   CreateApiTokenRequest,
   CreateTenantRequest,
+  CreateTenantIpAclRequest,
+  UpdateTenantIpAclRequest,
 } from '../types/api';
 
 // Health
@@ -291,10 +293,11 @@ export function useRevokeAgent() {
 }
 
 // Tenants
-export function useTenants() {
+export function useTenants(enabled: boolean = true) {
   return useQuery({
     queryKey: ['tenants'],
     queryFn: api.getTenants,
+    enabled,
   });
 }
 
@@ -314,6 +317,60 @@ export function useDeleteTenant() {
     mutationFn: (id: number) => api.deleteTenant(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tenants'] });
+    },
+  });
+}
+
+// IP ACLs
+export function useTenantIpAcls(tenantId: number | null) {
+  return useQuery({
+    queryKey: ['tenantIpAcls', tenantId],
+    queryFn: () => api.getTenantIpAcls(tenantId!),
+    enabled: !!tenantId,
+  });
+}
+
+export function useCreateTenantIpAcl() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      tenantId,
+      data,
+    }: {
+      tenantId: number;
+      data: CreateTenantIpAclRequest;
+    }) => api.createTenantIpAcl(tenantId, data),
+    onSuccess: (_, { tenantId }) => {
+      queryClient.invalidateQueries({ queryKey: ['tenantIpAcls', tenantId] });
+    },
+  });
+}
+
+export function useUpdateTenantIpAcl() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      tenantId,
+      aclId,
+      data,
+    }: {
+      tenantId: number;
+      aclId: number;
+      data: UpdateTenantIpAclRequest;
+    }) => api.updateTenantIpAcl(tenantId, aclId, data),
+    onSuccess: (_, { tenantId }) => {
+      queryClient.invalidateQueries({ queryKey: ['tenantIpAcls', tenantId] });
+    },
+  });
+}
+
+export function useDeleteTenantIpAcl() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ tenantId, aclId }: { tenantId: number; aclId: number }) =>
+      api.deleteTenantIpAcl(tenantId, aclId),
+    onSuccess: (_, { tenantId }) => {
+      queryClient.invalidateQueries({ queryKey: ['tenantIpAcls', tenantId] });
     },
   });
 }

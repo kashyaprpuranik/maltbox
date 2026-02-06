@@ -19,6 +19,9 @@ import type {
   AgentApprovalResponse,
   Tenant,
   CreateTenantRequest,
+  TenantIpAcl,
+  CreateTenantIpAclRequest,
+  UpdateTenantIpAclRequest,
   LogQueryResponse,
 } from '../types/api';
 
@@ -46,7 +49,9 @@ function getAuthHeaders(): HeadersInit {
 }
 
 async function handleResponse<T>(response: Response): Promise<T> {
-  if (response.status === 401 || response.status === 403) {
+  // Only logout on 401 (Unauthorized), not 403 (Forbidden)
+  // 401 = not authenticated, 403 = authenticated but lacking permission
+  if (response.status === 401) {
     localStorage.removeItem('api_token');
     window.location.href = '/login';
     throw new ApiError(response.status, 'Unauthorized');
@@ -383,6 +388,53 @@ export const api = {
       method: 'DELETE',
       headers: getAuthHeaders(),
     });
+    return handleResponse<void>(response);
+  },
+
+  // IP ACLs
+  getTenantIpAcls: async (tenantId: number): Promise<TenantIpAcl[]> => {
+    const response = await fetch(`${API_BASE}/tenants/${tenantId}/ip-acls`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<TenantIpAcl[]>(response);
+  },
+
+  createTenantIpAcl: async (
+    tenantId: number,
+    data: CreateTenantIpAclRequest
+  ): Promise<TenantIpAcl> => {
+    const response = await fetch(`${API_BASE}/tenants/${tenantId}/ip-acls`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<TenantIpAcl>(response);
+  },
+
+  updateTenantIpAcl: async (
+    tenantId: number,
+    aclId: number,
+    data: UpdateTenantIpAclRequest
+  ): Promise<TenantIpAcl> => {
+    const response = await fetch(
+      `${API_BASE}/tenants/${tenantId}/ip-acls/${aclId}`,
+      {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(data),
+      }
+    );
+    return handleResponse<TenantIpAcl>(response);
+  },
+
+  deleteTenantIpAcl: async (tenantId: number, aclId: number): Promise<void> => {
+    const response = await fetch(
+      `${API_BASE}/tenants/${tenantId}/ip-acls/${aclId}`,
+      {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      }
+    );
     return handleResponse<void>(response);
   },
 };

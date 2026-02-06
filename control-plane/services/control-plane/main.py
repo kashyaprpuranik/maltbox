@@ -10,6 +10,7 @@ import hashlib
 import secrets
 import asyncio
 import uuid
+import ipaddress
 from datetime import datetime, timedelta
 from typing import Optional, List
 from contextlib import asynccontextmanager
@@ -21,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import RedirectResponse
 from starlette.websockets import WebSocketState
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Boolean, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Boolean, ForeignKey, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -55,6 +56,28 @@ class Tenant(Base):
     # Relationships
     agents = relationship("AgentState", back_populates="tenant")
     tokens = relationship("ApiToken", back_populates="tenant")
+    ip_acls = relationship("TenantIpAcl", back_populates="tenant", cascade="all, delete-orphan")
+
+
+class TenantIpAcl(Base):
+    """IP ACL entries scoped to tenant for control plane access."""
+    __tablename__ = "tenant_ip_acls"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    cidr = Column(String(50), nullable=False)  # CIDR notation: "10.0.0.0/8" or "192.168.1.1/32"
+    description = Column(String(500))
+    enabled = Column(Boolean, default=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    created_by = Column(String(100))
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship
+    tenant = relationship("Tenant", back_populates="ip_acls")
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'cidr', name='uq_tenant_ip_acl'),
+    )
 
 
 class AuditLog(Base):
@@ -337,6 +360,33 @@ class TenantResponse(BaseModel):
     slug: str
     created_at: datetime
     agent_count: int = 0  # Computed field
+
+    class Config:
+        from_attributes = True
+
+
+class TenantIpAclCreate(BaseModel):
+    """Request to create a new IP ACL entry."""
+    cidr: str  # e.g., "10.0.0.0/8", "192.168.1.0/24", "203.0.113.50/32"
+    description: Optional[str] = None
+
+
+class TenantIpAclUpdate(BaseModel):
+    """Request to update an IP ACL entry."""
+    description: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+class TenantIpAclResponse(BaseModel):
+    """IP ACL entry response."""
+    id: int
+    tenant_id: int
+    cidr: str
+    description: Optional[str]
+    enabled: bool
+    created_at: datetime
+    created_by: Optional[str]
+    updated_at: datetime
 
     class Config:
         from_attributes = True
@@ -666,6 +716,106 @@ def get_tenant_agent_ids(db: Session, tenant_id: int) -> List[str]:
 
 
 # =============================================================================
+# IP ACL Validation
+# =============================================================================
+
+def validate_ip_in_cidr(ip_str: str, cidr_str: str) -> bool:
+    """Check if an IP address is within a CIDR range."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        network = ipaddress.ip_network(cidr_str, strict=False)
+        return ip in network
+    except ValueError:
+        return False
+
+
+def get_client_ip(request: Request) -> str:
+    """Get client IP, respecting X-Forwarded-For for proxied requests."""
+    return get_remote_address(request)
+
+
+async def verify_ip_acl(
+    request: Request,
+    token_info: TokenInfo = Depends(verify_token),
+    db: Session = Depends(get_db)
+) -> TokenInfo:
+    """Verify client IP against tenant's IP ACL (for admin tokens only).
+
+    IP ACL checks are:
+    - Skipped for super admins (logged for audit)
+    - Skipped for agent tokens (data planes may have dynamic IPs)
+    - Applied only when tenant has IP ACLs configured
+    - If tenant has ACLs but IP doesn't match any, request is denied
+    """
+    # Skip for super admins
+    if token_info.is_super_admin:
+        return token_info
+
+    # Skip for agent tokens (heartbeat, allowlist export, etc.)
+    if token_info.token_type == "agent":
+        return token_info
+
+    # Only apply to admin tokens with a tenant
+    if token_info.token_type != "admin" or not token_info.tenant_id:
+        return token_info
+
+    # Get enabled IP ACLs for this tenant
+    ip_acls = db.query(TenantIpAcl).filter(
+        TenantIpAcl.tenant_id == token_info.tenant_id,
+        TenantIpAcl.enabled == True
+    ).all()
+
+    # No ACLs configured = allow all (backwards compatible)
+    if not ip_acls:
+        return token_info
+
+    # Get client IP
+    client_ip = get_client_ip(request)
+
+    # Check if IP matches any allowed CIDR
+    for acl in ip_acls:
+        if validate_ip_in_cidr(client_ip, acl.cidr):
+            return token_info
+
+    # IP not in any allowed range - deny and log
+    log = AuditLog(
+        event_type="ip_acl_denied",
+        user=token_info.token_name,
+        action=f"Access denied: IP {client_ip} not in tenant's allowed ranges",
+        details=json.dumps({
+            "client_ip": client_ip,
+            "tenant_id": token_info.tenant_id,
+            "allowed_cidrs": [acl.cidr for acl in ip_acls]
+        }),
+        severity="WARNING"
+    )
+    db.add(log)
+    db.commit()
+
+    raise HTTPException(
+        status_code=403,
+        detail=f"Access denied: IP address {client_ip} is not in the allowed range for this tenant"
+    )
+
+
+async def require_admin_with_ip_check(
+    request: Request,
+    token_info: TokenInfo = Depends(verify_token),
+    db: Session = Depends(get_db)
+) -> TokenInfo:
+    """Require admin token AND verify IP ACL."""
+    # First check admin
+    if token_info.token_type != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Admin token required for this operation"
+        )
+
+    # Then verify IP ACL
+    return await verify_ip_acl(request, token_info, db)
+
+
+# =============================================================================
 # Application
 # =============================================================================
 
@@ -698,8 +848,9 @@ def seed_tokens(db: Session):
     """Seed default tokens for development/testing.
 
     Creates:
-    - admin-token: Admin role (full access to allowlist, secrets, etc.)
-    - dev-token: Developer role (read access, terminal access)
+    - super-admin-token: Super admin (cross-tenant access)
+    - admin-token: Admin role (full access within default tenant)
+    - dev-token: Developer role (read access, terminal access within default tenant)
 
     These are only created if they don't already exist. The actual token
     values are deterministic for easy testing but should be replaced in production.
@@ -707,6 +858,13 @@ def seed_tokens(db: Session):
     # Check if we should seed (controlled by env var)
     if os.environ.get('SEED_TOKENS', 'true').lower() != 'true':
         return
+
+    # Get the default tenant for non-super-admin tokens
+    default_tenant = db.query(Tenant).filter(
+        Tenant.slug == "default",
+        Tenant.deleted_at.is_(None)
+    ).first()
+    default_tenant_id = default_tenant.id if default_tenant else None
 
     # Well-known test tokens (deterministic for testing)
     test_tokens = [
@@ -716,6 +874,7 @@ def seed_tokens(db: Session):
             "token_type": "admin",
             "roles": "admin",
             "is_super_admin": True,
+            "tenant_id": None,  # Super admin has no tenant restriction
         },
         {
             "name": "admin-token",
@@ -723,6 +882,7 @@ def seed_tokens(db: Session):
             "token_type": "admin",
             "roles": "admin",
             "is_super_admin": False,
+            "tenant_id": default_tenant_id,  # Scoped to default tenant
         },
         {
             "name": "dev-token",
@@ -730,6 +890,7 @@ def seed_tokens(db: Session):
             "token_type": "admin",
             "roles": "developer",
             "is_super_admin": False,
+            "tenant_id": default_tenant_id,  # Scoped to default tenant
         },
     ]
 
@@ -742,9 +903,10 @@ def seed_tokens(db: Session):
                 token_type=token_def["token_type"],
                 roles=token_def["roles"],
                 is_super_admin=token_def["is_super_admin"],
+                tenant_id=token_def["tenant_id"],
             )
             db.add(db_token)
-            logger.info(f"Seeded token: {token_def['name']} (roles: {token_def['roles']})")
+            logger.info(f"Seeded token: {token_def['name']} (roles: {token_def['roles']}, tenant: {token_def['tenant_id']})")
 
     db.commit()
 
@@ -851,7 +1013,7 @@ async def query_agent_logs(
     limit: int = 100,
     start: Optional[str] = None,
     end: Optional[str] = None,
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_developer_role)  # Developers can view logs
 ):
     """Query agent logs from OpenObserve (admin only).
 
@@ -908,9 +1070,11 @@ async def query_agent_logs(
         )
 
         if response.status_code != 200:
+            # Return 502 Bad Gateway for upstream errors - don't pass through status
+            # (passing through 401 would make frontend think user token is invalid)
             raise HTTPException(
-                status_code=response.status_code,
-                detail=f"OpenObserve query failed: {response.text}"
+                status_code=502,
+                detail=f"OpenObserve query failed (status {response.status_code}): {response.text}"
             )
 
         result = response.json()
@@ -932,7 +1096,7 @@ async def query_agent_logs(
 @app.get("/api/v1/audit-logs", response_model=List[AuditLogResponse])
 async def get_audit_logs(
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin),
+    token_info: TokenInfo = Depends(require_admin_role),
     event_type: Optional[str] = None,
     user: Optional[str] = None,
     severity: Optional[str] = None,
@@ -974,7 +1138,7 @@ async def get_audit_logs(
 @app.get("/api/v1/allowlist", response_model=List[AllowlistEntryResponse])
 async def get_allowlist(
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin),
+    token_info: TokenInfo = Depends(require_admin_role),
     entry_type: Optional[str] = None,
     agent_id: Optional[str] = None
 ):
@@ -1005,7 +1169,7 @@ async def add_allowlist_entry(
     request: Request,
     entry: AllowlistEntryCreate,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Add a new allowlist entry (admin only).
 
@@ -1041,7 +1205,7 @@ async def add_allowlist_entry(
 async def delete_allowlist_entry(
     entry_id: int,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Delete an allowlist entry (admin only)"""
     entry = db.query(AllowlistEntry).filter(AllowlistEntry.id == entry_id).first()
@@ -1061,7 +1225,7 @@ async def update_allowlist_entry(
     enabled: Optional[bool] = None,
     description: Optional[str] = None,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Update an allowlist entry (admin only)"""
     entry = db.query(AllowlistEntry).filter(AllowlistEntry.id == entry_id).first()
@@ -1144,7 +1308,7 @@ async def export_allowlist(
 async def get_secrets(
     request: Request,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin),
+    token_info: TokenInfo = Depends(require_admin_role),
     agent_id: Optional[str] = None
 ):
     """List all managed secrets (metadata only, not values) - admin only.
@@ -1196,7 +1360,7 @@ async def create_secret(
     request: Request,
     secret: SecretCreate,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Create a new secret (encrypted in database) - admin only.
 
@@ -1246,7 +1410,7 @@ async def rotate_secret(
     secret_name: str,
     request: RotateSecretRequest,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Rotate a secret (admin only)"""
     secret = db.query(Secret).filter(Secret.name == secret_name).first()
@@ -1269,7 +1433,7 @@ async def rotate_secret(
 async def get_secret_value(
     secret_name: str,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Get decrypted secret value (admin only, for credential-injector)"""
     secret = db.query(Secret).filter(Secret.name == secret_name).first()
@@ -1286,7 +1450,7 @@ async def get_secret_value(
 async def delete_secret(
     secret_name: str,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Delete a secret by name (admin only)."""
     secret = db.query(Secret).filter(Secret.name == secret_name).first()
@@ -1401,7 +1565,7 @@ async def get_credential_for_domain(
 @app.get("/api/v1/rate-limits", response_model=List[RateLimitResponse])
 async def get_rate_limits(
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin),
+    token_info: TokenInfo = Depends(require_admin_role),
     agent_id: Optional[str] = None
 ):
     """List all rate limit configurations (admin only).
@@ -1427,7 +1591,7 @@ async def get_rate_limits(
 async def create_rate_limit(
     rate_limit: RateLimitCreate,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Create a new rate limit configuration (admin only).
 
@@ -1459,7 +1623,7 @@ async def update_rate_limit(
     rate_limit_id: int,
     rate_limit: RateLimitUpdate,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Update a rate limit configuration (admin only)"""
     db_rate_limit = db.query(RateLimit).filter(RateLimit.id == rate_limit_id).first()
@@ -1484,7 +1648,7 @@ async def update_rate_limit(
 async def delete_rate_limit(
     rate_limit_id: int,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Delete a rate limit configuration (admin only)"""
     db_rate_limit = db.query(RateLimit).filter(RateLimit.id == rate_limit_id).first()
@@ -1684,7 +1848,7 @@ async def queue_agent_wipe(
     agent_id: str,
     request: AgentCommandRequest,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Queue a wipe command for the specified agent (admin only).
 
@@ -1723,7 +1887,7 @@ async def queue_agent_wipe(
 async def queue_agent_restart(
     agent_id: str,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Queue a restart command for the specified agent (admin only)."""
     state = get_or_create_agent_state(db, agent_id)
@@ -1749,7 +1913,7 @@ async def queue_agent_restart(
 async def queue_agent_stop(
     agent_id: str,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Queue a stop command for the specified agent (admin only)."""
     state = get_or_create_agent_state(db, agent_id)
@@ -1775,7 +1939,7 @@ async def queue_agent_stop(
 async def queue_agent_start(
     agent_id: str,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Queue a start command for the specified agent (admin only)."""
     state = get_or_create_agent_state(db, agent_id)
@@ -1841,7 +2005,7 @@ async def get_agent_status(
 async def approve_agent(
     agent_id: str,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Approve an agent to connect to the control plane."""
     state = db.query(AgentState).filter(
@@ -1879,7 +2043,7 @@ async def approve_agent(
 async def reject_agent(
     agent_id: str,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Reject and soft-delete a pending agent."""
     state = db.query(AgentState).filter(
@@ -1910,7 +2074,7 @@ async def reject_agent(
 async def revoke_agent(
     agent_id: str,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Revoke approval for an agent (set approved=False)."""
     state = db.query(AgentState).filter(
@@ -1945,7 +2109,7 @@ async def revoke_agent(
 async def generate_stcp_secret(
     agent_id: str,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Generate a new STCP secret for an agent (admin only).
 
@@ -2217,7 +2381,7 @@ async def list_terminal_sessions(
     agent_id: Optional[str] = None,
     limit: int = Query(default=50, le=200),
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """List terminal sessions (admin only).
 
@@ -2398,13 +2562,185 @@ async def delete_tenant(
 
 
 # =============================================================================
+# Tenant IP ACL Endpoints
+# =============================================================================
+
+@app.get("/api/v1/tenants/{tenant_id}/ip-acls", response_model=List[TenantIpAclResponse])
+async def list_tenant_ip_acls(
+    tenant_id: int,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin_role)
+):
+    """List IP ACL entries for a tenant (admin only).
+
+    Non-super-admins can only view ACLs for their own tenant.
+    """
+    # Verify tenant access
+    if not token_info.is_super_admin and token_info.tenant_id != tenant_id:
+        raise HTTPException(status_code=403, detail="Access denied to this tenant")
+
+    # Verify tenant exists
+    tenant = db.query(Tenant).filter(
+        Tenant.id == tenant_id,
+        Tenant.deleted_at.is_(None)
+    ).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    return db.query(TenantIpAcl).filter(
+        TenantIpAcl.tenant_id == tenant_id
+    ).order_by(TenantIpAcl.created_at.desc()).all()
+
+
+@app.post("/api/v1/tenants/{tenant_id}/ip-acls", response_model=TenantIpAclResponse)
+@limiter.limit("30/minute")
+async def create_tenant_ip_acl(
+    request: Request,
+    tenant_id: int,
+    acl: TenantIpAclCreate,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin_role)
+):
+    """Create an IP ACL entry for a tenant (admin only).
+
+    CIDR format: "10.0.0.0/8", "192.168.1.0/24", "203.0.113.50/32"
+    Use /32 for single IP addresses.
+    """
+    # Verify tenant access
+    if not token_info.is_super_admin and token_info.tenant_id != tenant_id:
+        raise HTTPException(status_code=403, detail="Access denied to this tenant")
+
+    # Verify tenant exists
+    tenant = db.query(Tenant).filter(
+        Tenant.id == tenant_id,
+        Tenant.deleted_at.is_(None)
+    ).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    # Validate CIDR format
+    try:
+        ipaddress.ip_network(acl.cidr, strict=False)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid CIDR format: {e}")
+
+    # Check for duplicates
+    existing = db.query(TenantIpAcl).filter(
+        TenantIpAcl.tenant_id == tenant_id,
+        TenantIpAcl.cidr == acl.cidr
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="IP ACL entry already exists for this CIDR")
+
+    db_acl = TenantIpAcl(
+        tenant_id=tenant_id,
+        cidr=acl.cidr,
+        description=acl.description,
+        created_by=token_info.token_name or "admin"
+    )
+    db.add(db_acl)
+
+    # Audit log
+    log = AuditLog(
+        event_type="ip_acl_created",
+        user=token_info.token_name or "admin",
+        action=f"IP ACL created for tenant {tenant_id}: {acl.cidr}",
+        details=json.dumps({"tenant_id": tenant_id, "cidr": acl.cidr}),
+        severity="INFO"
+    )
+    db.add(log)
+    db.commit()
+    db.refresh(db_acl)
+
+    return db_acl
+
+
+@app.patch("/api/v1/tenants/{tenant_id}/ip-acls/{acl_id}", response_model=TenantIpAclResponse)
+@limiter.limit("30/minute")
+async def update_tenant_ip_acl(
+    request: Request,
+    tenant_id: int,
+    acl_id: int,
+    acl: TenantIpAclUpdate,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin_role)
+):
+    """Update an IP ACL entry (admin only)."""
+    # Verify tenant access
+    if not token_info.is_super_admin and token_info.tenant_id != tenant_id:
+        raise HTTPException(status_code=403, detail="Access denied to this tenant")
+
+    db_acl = db.query(TenantIpAcl).filter(
+        TenantIpAcl.id == acl_id,
+        TenantIpAcl.tenant_id == tenant_id
+    ).first()
+    if not db_acl:
+        raise HTTPException(status_code=404, detail="IP ACL entry not found")
+
+    if acl.description is not None:
+        db_acl.description = acl.description
+    if acl.enabled is not None:
+        db_acl.enabled = acl.enabled
+
+    # Audit log
+    log = AuditLog(
+        event_type="ip_acl_updated",
+        user=token_info.token_name or "admin",
+        action=f"IP ACL updated for tenant {tenant_id}: {db_acl.cidr}",
+        details=json.dumps({"acl_id": acl_id, "changes": acl.dict(exclude_unset=True)}),
+        severity="INFO"
+    )
+    db.add(log)
+    db.commit()
+    db.refresh(db_acl)
+
+    return db_acl
+
+
+@app.delete("/api/v1/tenants/{tenant_id}/ip-acls/{acl_id}")
+async def delete_tenant_ip_acl(
+    tenant_id: int,
+    acl_id: int,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin_role)
+):
+    """Delete an IP ACL entry (admin only)."""
+    # Verify tenant access
+    if not token_info.is_super_admin and token_info.tenant_id != tenant_id:
+        raise HTTPException(status_code=403, detail="Access denied to this tenant")
+
+    db_acl = db.query(TenantIpAcl).filter(
+        TenantIpAcl.id == acl_id,
+        TenantIpAcl.tenant_id == tenant_id
+    ).first()
+    if not db_acl:
+        raise HTTPException(status_code=404, detail="IP ACL entry not found")
+
+    cidr = db_acl.cidr  # Save for logging
+    db.delete(db_acl)
+
+    # Audit log
+    log = AuditLog(
+        event_type="ip_acl_deleted",
+        user=token_info.token_name or "admin",
+        action=f"IP ACL deleted for tenant {tenant_id}: {cidr}",
+        details=json.dumps({"acl_id": acl_id, "cidr": cidr}),
+        severity="WARNING"
+    )
+    db.add(log)
+    db.commit()
+
+    return {"status": "deleted"}
+
+
+# =============================================================================
 # API Token Management Endpoints
 # =============================================================================
 
 @app.get("/api/v1/tokens", response_model=List[ApiTokenResponse])
 async def list_tokens(
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """List all API tokens.
 
@@ -2436,7 +2772,7 @@ async def list_tokens(
 async def create_token(
     request: ApiTokenCreate,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Create a new API token (admin only).
 
@@ -2552,7 +2888,7 @@ async def create_token(
 async def delete_token(
     token_id: int,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Delete an API token (admin only)."""
     db_token = db.query(ApiToken).filter(ApiToken.id == token_id).first()
@@ -2581,7 +2917,7 @@ async def update_token(
     token_id: int,
     enabled: Optional[bool] = None,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
+    token_info: TokenInfo = Depends(require_admin_role)
 ):
     """Update an API token (enable/disable)."""
     db_token = db.query(ApiToken).filter(ApiToken.id == token_id).first()

@@ -68,6 +68,81 @@ with engine.connect() as conn:
         conn.execute(text('CREATE INDEX ix_terminal_sessions_agent_id ON terminal_sessions(agent_id)'))
         conn.commit()
 
+    # Create tenant_ip_acls table if missing
+    result = conn.execute(text(\"\"\"
+        SELECT table_name FROM information_schema.tables
+        WHERE table_name = 'tenant_ip_acls'
+    \"\"\"))
+    if not result.fetchone():
+        print('Creating tenant_ip_acls table...')
+        conn.execute(text('''
+            CREATE TABLE tenant_ip_acls (
+                id SERIAL PRIMARY KEY,
+                tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+                cidr VARCHAR(50) NOT NULL,
+                description VARCHAR(500),
+                enabled BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_by VARCHAR(100),
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        '''))
+        conn.execute(text('CREATE INDEX ix_tenant_ip_acls_tenant_id ON tenant_ip_acls(tenant_id)'))
+        conn.execute(text('CREATE INDEX ix_tenant_ip_acls_enabled ON tenant_ip_acls(enabled)'))
+        conn.execute(text('CREATE UNIQUE INDEX ix_tenant_ip_acls_unique ON tenant_ip_acls(tenant_id, cidr)'))
+        conn.commit()
+
+    # Fix seed tokens - ensure correct is_super_admin and tenant_id
+    # Get default tenant id first
+    result = conn.execute(text(\"\"\"
+        SELECT id FROM tenants WHERE slug = 'default' AND deleted_at IS NULL LIMIT 1
+    \"\"\"))
+    default_tenant = result.fetchone()
+    if default_tenant:
+        default_tenant_id = default_tenant[0]
+
+        # Fix admin-token: should NOT be super admin, should have tenant_id
+        result = conn.execute(text(\"\"\"
+            SELECT id FROM api_tokens WHERE name = 'admin-token'
+            AND (is_super_admin = TRUE OR is_super_admin IS NULL OR tenant_id IS NULL)
+        \"\"\"))
+        if result.fetchone():
+            print('Fixing admin-token: setting is_super_admin=FALSE and tenant_id...')
+            conn.execute(text(\"\"\"
+                UPDATE api_tokens
+                SET is_super_admin = FALSE, tenant_id = :tenant_id
+                WHERE name = 'admin-token'
+            \"\"\"), {'tenant_id': default_tenant_id})
+            conn.commit()
+
+        # Fix dev-token: should NOT be super admin, should have tenant_id
+        result = conn.execute(text(\"\"\"
+            SELECT id FROM api_tokens WHERE name = 'dev-token'
+            AND (is_super_admin = TRUE OR is_super_admin IS NULL OR tenant_id IS NULL)
+        \"\"\"))
+        if result.fetchone():
+            print('Fixing dev-token: setting is_super_admin=FALSE and tenant_id...')
+            conn.execute(text(\"\"\"
+                UPDATE api_tokens
+                SET is_super_admin = FALSE, tenant_id = :tenant_id
+                WHERE name = 'dev-token'
+            \"\"\"), {'tenant_id': default_tenant_id})
+            conn.commit()
+
+        # Ensure super-admin-token has is_super_admin=TRUE
+        result = conn.execute(text(\"\"\"
+            SELECT id FROM api_tokens WHERE name = 'super-admin-token'
+            AND (is_super_admin = FALSE OR is_super_admin IS NULL)
+        \"\"\"))
+        if result.fetchone():
+            print('Fixing super-admin-token: setting is_super_admin=TRUE...')
+            conn.execute(text(\"\"\"
+                UPDATE api_tokens
+                SET is_super_admin = TRUE, tenant_id = NULL
+                WHERE name = 'super-admin-token'
+            \"\"\"))
+            conn.commit()
+
 print('Database migrations complete.')
 
 # Check if seeding needed

@@ -193,6 +193,28 @@ export interface CreateTenantRequest {
   slug: string;
 }
 
+// IP ACLs
+export interface TenantIpAcl {
+  id: number;
+  tenant_id: number;
+  cidr: string;
+  description?: string;
+  enabled: boolean;
+  created_at: string;
+  created_by?: string;
+  updated_at: string;
+}
+
+export interface CreateTenantIpAclRequest {
+  cidr: string;
+  description?: string;
+}
+
+export interface UpdateTenantIpAclRequest {
+  description?: string;
+  enabled?: boolean;
+}
+
 // Log query response types (OpenObserve)
 export interface LogQueryResponse {
   status: string;

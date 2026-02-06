@@ -20,11 +20,14 @@ import {
   useUpdateToken,
   useTenants,
 } from '../hooks/useApi';
+import { useAuth } from '../contexts/AuthContext';
 import type { CreateApiTokenRequest, ApiTokenCreated } from '../types/api';
 
 export function Tokens() {
+  const { user } = useAuth();
   const { data: tokens, isLoading } = useTokens();
-  const { data: tenants } = useTenants();
+  // Only super admins can see tenants list (for tenant dropdown in create modal)
+  const { data: tenants } = useTenants(user?.is_super_admin === true);
   const createToken = useCreateToken();
   const deleteToken = useDeleteToken();
   const updateToken = useUpdateToken();

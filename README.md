@@ -31,7 +31,7 @@ Maltbox assumes the AI agent is **untrusted by default**. The agent may be:
 
 ### Network Isolation
 - **agent-net**: Internal network, no external access. Agent can only reach Envoy and CoreDNS.
-- **infra-net**: Can reach external services. Used by Envoy (credentials), Vector (logs → OpenObserve), and Agent Manager (polls CP).
+- **infra-net**: Can reach external services. Used by Envoy, Agent Manager, and Local Admin (standalone) or Vector (control plane mode).
 - **IPv6 disabled**: Prevents bypass of IPv4 egress controls.
 
 ### Polling Architecture (No Inbound Ports)
@@ -73,8 +73,8 @@ Run the data plane without a control plane. Uses local admin UI for management.
 │                              │                                   │
 │                              ▼                                   │
 │  ┌──────────────┐    ┌─────────────┐                            │
-│  │Agent Manager │    │ maltbox.yaml│ ─── generates ──┐          │
-│  │(config sync) │    │  (config)   │                 │          │
+│  │Agent Manager │◄───│ maltbox.yaml│ ─── generates ──┐          │
+│  │(watch+reload)│    │  (config)   │                 │          │
 │  └──────────────┘    └─────────────┘                 │          │
 │                                                      ▼          │
 │  ┌─────────────────────────────────────────────────────────────┐│
@@ -109,7 +109,7 @@ docker-compose --profile admin up -d
 #   - SSH tunnel setup
 ```
 
-### Connected Mode
+### Control Plane Mode
 
 Run with centralized management via the control plane.
 
@@ -276,6 +276,7 @@ Tokens are managed via the Admin UI (`/tokens`) or API. See [docs/development.md
 
 ## Roadmap
 
+- [ ] Improved secret management in standalone mode (encrypted local storage)
 - [ ] mTLS for data plane ↔ control plane communication (step-ca)
 - [ ] Package registry proxy/allowlist (npm, pip, cargo)
 - [ ] Alert rules for security events (gVisor syscall denials, rate limit hits)

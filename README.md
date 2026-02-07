@@ -26,45 +26,56 @@ Maltbox assumes the AI agent is **untrusted by default**. The agent may be:
 
 **Not in scope**: Maltbox does not protect against attacks from the host machine, malicious administrators, or physical access. It assumes the control plane and infrastructure operators are trusted.
 
-## Security Model
+## Security Principles
 
-### Network Isolation
-- **agent-net**: Internal network, no external access. Agent can only reach Envoy and CoreDNS.
-- **infra-net**: Can reach external services. Used by Envoy, Agent Manager, and Local Admin (standalone) or Vector (control plane mode).
-- **IPv6 disabled**: Prevents bypass of IPv4 egress controls.
+| Principle | Description |
+|-----------|-------------|
+| **Network Isolation** | Agent can only reach Envoy (proxy) and CoreDNS (DNS filter) - no direct internet access |
+| **No Inbound Ports** | Data plane initiates all connections; control plane cannot push to agents |
+| **Credential Hiding** | Agent never sees API keys; credentials injected by proxy at egress |
+| **Defense in Depth** | Multiple layers: network, container, optional kernel (gVisor) isolation |
+| **Least Privilege** | Minimal capabilities, read-only filesystem, resource limits |
+| **Audit Everything** | All HTTP requests, DNS queries, and syscalls logged |
 
-### Polling Architecture (No Inbound Ports)
-- Data plane has **no inbound ports** - control plane cannot initiate connections
-- Agent Manager polls control plane every 30s for commands (wipe, restart, stop, start)
-- Vector pushes logs directly to OpenObserve (not through CP API)
-- Allowlist synced from CP to CoreDNS and Envoy every 5 minutes
+## Hardening Details
 
-### Agent Container Hardening
-- Read-only root filesystem
-- Dropped all capabilities
-- No privilege escalation (`no-new-privileges`)
-- Resource limits (CPU, memory, pids)
-- DNS forced through CoreDNS filter
-- All HTTP(S) traffic forced through Envoy proxy
+### Container Security
+| Control | Implementation |
+|---------|----------------|
+| Read-only filesystem | `read_only: true` on agent container |
+| No privilege escalation | `no-new-privileges` security option |
+| Dropped capabilities | All capabilities dropped |
+| Resource limits | CPU, memory, PID limits enforced |
+| Forced proxy | `HTTP_PROXY`/`HTTPS_PROXY` environment variables |
+| Forced DNS | Container DNS set to CoreDNS filter IP |
 
-### Kernel Isolation (Recommended for Production)
+### Network Security
+| Control | Implementation |
+|---------|----------------|
+| Internal network | `agent-net` marked as `internal: true` |
+| IPv6 disabled | Prevents bypass of IPv4 egress controls |
+| Allowlist enforcement | CoreDNS blocks resolution of non-allowed domains |
+| Egress proxy | All HTTP(S) routed through Envoy |
 
-For high-security deployments, use the `secure` profile which enables [gVisor](https://gvisor.dev) to intercept syscalls in user-space:
+### Kernel Isolation (Production)
+
+For high-security deployments, enable [gVisor](https://gvisor.dev) to intercept syscalls in user-space:
 
 ```bash
-# Install gVisor first: https://gvisor.dev/docs/user_guide/install/
 docker-compose --profile secure --profile admin up -d
 ```
 
-The `secure` profile enables:
-- **gVisor runtime** (`runsc`) - agent syscalls never reach host kernel
-- **Stricter resource limits** - 1 CPU, 2GB memory, 128 PIDs (vs 2 CPU, 4GB, 256 PIDs)
-- **Reduced log retention** - smaller attack surface
+| Control | Implementation |
+|---------|----------------|
+| gVisor runtime | `runsc` - syscalls never reach host kernel |
+| Stricter limits | 1 CPU, 2GB memory, 128 PIDs |
 
 ### Credential Security
-- Secrets encrypted with Fernet (AES) and stored in Postgres
-- Envoy Lua filter fetches and injects credentials (cached for 5 min)
-- Agent never sees the actual credentials
+| Control | Implementation |
+|---------|----------------|
+| Encryption at rest | Fernet (AES) encryption in Postgres |
+| Injection at proxy | Envoy Lua filter adds headers at egress |
+| Short-lived cache | Credentials cached for 5 minutes |
 
 ## Quick Start
 

@@ -1,18 +1,11 @@
 import type {
   HealthStatus,
   DataPlane,
-  Secret,
-  CreateSecretRequest,
-  AllowlistEntry,
-  CreateAllowlistEntryRequest,
   AuditLog,
   AuditLogFilters,
   PaginatedResponse,
   AgentStatus,
   AgentCommandResponse,
-  RateLimit,
-  CreateRateLimitRequest,
-  UpdateRateLimitRequest,
   ApiToken,
   ApiTokenCreated,
   CreateApiTokenRequest,
@@ -23,6 +16,10 @@ import type {
   CreateTenantIpAclRequest,
   UpdateTenantIpAclRequest,
   LogQueryResponse,
+  DomainPolicy,
+  CreateDomainPolicyRequest,
+  UpdateDomainPolicyRequest,
+  DomainPolicyCredential,
 } from '../types/api';
 
 const API_BASE = './api/v1';
@@ -113,88 +110,6 @@ export const api = {
     return handleResponse<DataPlane[]>(response);
   },
 
-  // Secrets
-  getSecrets: async (): Promise<Secret[]> => {
-    const response = await fetch(`${API_BASE}/secrets`, {
-      headers: getAuthHeaders(),
-    });
-    return handleResponse<Secret[]>(response);
-  },
-
-  createSecret: async (data: CreateSecretRequest): Promise<Secret> => {
-    const response = await fetch(`${API_BASE}/secrets`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(data),
-    });
-    return handleResponse<Secret>(response);
-  },
-
-  rotateSecret: async (name: string, newValue: string): Promise<Secret> => {
-    const response = await fetch(
-      `${API_BASE}/secrets/${encodeURIComponent(name)}/rotate`,
-      {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ new_value: newValue }),
-      }
-    );
-    return handleResponse<Secret>(response);
-  },
-
-  deleteSecret: async (name: string): Promise<void> => {
-    const response = await fetch(
-      `${API_BASE}/secrets/${encodeURIComponent(name)}`,
-      {
-        method: 'DELETE',
-        headers: getAuthHeaders(),
-      }
-    );
-    return handleResponse<void>(response);
-  },
-
-  // Allowlist
-  getAllowlist: async (type?: string): Promise<AllowlistEntry[]> => {
-    const url = type
-      ? `${API_BASE}/allowlist?entry_type=${type}`
-      : `${API_BASE}/allowlist`;
-    const response = await fetch(url, {
-      headers: getAuthHeaders(),
-    });
-    return handleResponse<AllowlistEntry[]>(response);
-  },
-
-  addAllowlistEntry: async (
-    data: CreateAllowlistEntryRequest
-  ): Promise<AllowlistEntry> => {
-    const response = await fetch(`${API_BASE}/allowlist`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(data),
-    });
-    return handleResponse<AllowlistEntry>(response);
-  },
-
-  updateAllowlistEntry: async (
-    id: number,
-    data: Partial<CreateAllowlistEntryRequest>
-  ): Promise<AllowlistEntry> => {
-    const response = await fetch(`${API_BASE}/allowlist/${id}`, {
-      method: 'PATCH',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(data),
-    });
-    return handleResponse<AllowlistEntry>(response);
-  },
-
-  deleteAllowlistEntry: async (id: number): Promise<void> => {
-    const response = await fetch(`${API_BASE}/allowlist/${id}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    });
-    return handleResponse<void>(response);
-  },
-
   // Audit Logs (Admin/CP logs from Postgres)
   getAuditLogs: async (
     params: AuditLogFilters = {}
@@ -272,40 +187,6 @@ export const api = {
       headers: getAuthHeaders(),
     });
     return handleResponse<AgentCommandResponse>(response);
-  },
-
-  // Rate Limits
-  getRateLimits: async (): Promise<RateLimit[]> => {
-    const response = await fetch(`${API_BASE}/rate-limits`, {
-      headers: getAuthHeaders(),
-    });
-    return handleResponse<RateLimit[]>(response);
-  },
-
-  createRateLimit: async (data: CreateRateLimitRequest): Promise<RateLimit> => {
-    const response = await fetch(`${API_BASE}/rate-limits`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(data),
-    });
-    return handleResponse<RateLimit>(response);
-  },
-
-  updateRateLimit: async (id: number, data: UpdateRateLimitRequest): Promise<RateLimit> => {
-    const response = await fetch(`${API_BASE}/rate-limits/${id}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(data),
-    });
-    return handleResponse<RateLimit>(response);
-  },
-
-  deleteRateLimit: async (id: number): Promise<void> => {
-    const response = await fetch(`${API_BASE}/rate-limits/${id}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    });
-    return handleResponse<void>(response);
   },
 
   // API Tokens
@@ -436,6 +317,52 @@ export const api = {
       }
     );
     return handleResponse<void>(response);
+  },
+
+  // Domain Policies
+  getDomainPolicies: async (agentId?: string): Promise<DomainPolicy[]> => {
+    const url = agentId
+      ? `${API_BASE}/domain-policies?agent_id=${encodeURIComponent(agentId)}`
+      : `${API_BASE}/domain-policies`;
+    const response = await fetch(url, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<DomainPolicy[]>(response);
+  },
+
+  createDomainPolicy: async (data: CreateDomainPolicyRequest): Promise<DomainPolicy> => {
+    const response = await fetch(`${API_BASE}/domain-policies`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<DomainPolicy>(response);
+  },
+
+  updateDomainPolicy: async (id: number, data: UpdateDomainPolicyRequest): Promise<DomainPolicy> => {
+    const response = await fetch(`${API_BASE}/domain-policies/${id}`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<DomainPolicy>(response);
+  },
+
+  deleteDomainPolicy: async (id: number): Promise<void> => {
+    const response = await fetch(`${API_BASE}/domain-policies/${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<void>(response);
+  },
+
+  rotateDomainPolicyCredential: async (id: number, credential: DomainPolicyCredential): Promise<DomainPolicy> => {
+    const response = await fetch(`${API_BASE}/domain-policies/${id}/rotate-credential`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(credential),
+    });
+    return handleResponse<DomainPolicy>(response);
   },
 };
 

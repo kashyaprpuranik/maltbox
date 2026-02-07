@@ -1,9 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { Dashboard } from './pages/Dashboard';
-import { Secrets } from './pages/Secrets';
-import { Allowlist } from './pages/Allowlist';
-import { RateLimits } from './pages/RateLimits';
+import { DomainPolicies } from './pages/DomainPolicies';
 import { IpAcls } from './pages/IpAcls';
 import { AuditLogs } from './pages/AuditLogs';
 import { AgentLogs } from './pages/AgentLogs';
@@ -47,9 +45,7 @@ function App() {
         }
       >
         <Route index element={<Dashboard />} />
-        <Route path="secrets" element={<Secrets />} />
-        <Route path="allowlist" element={<Allowlist />} />
-        <Route path="rate-limits" element={<RateLimits />} />
+        <Route path="domain-policies" element={<DomainPolicies />} />
         <Route path="ip-acls" element={<IpAcls />} />
         <Route path="admin-logs" element={<AuditLogs />} />
         <Route path="agent-logs" element={<AgentLogs />} />
@@ -58,7 +54,10 @@ function App() {
         <Route path="settings" element={<Settings />} />
         <Route path="terminal/:agentId" element={<Terminal />} />
       </Route>
-      {/* Redirect old route */}
+      {/* Redirects for legacy routes */}
+      <Route path="/secrets" element={<Navigate to="/domain-policies" replace />} />
+      <Route path="/allowlist" element={<Navigate to="/domain-policies" replace />} />
+      <Route path="/rate-limits" element={<Navigate to="/domain-policies" replace />} />
       <Route path="/audit-logs" element={<Navigate to="/admin-logs" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

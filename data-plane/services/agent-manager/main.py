@@ -307,7 +307,7 @@ def sync_config() -> bool:
     """Sync configuration and regenerate CoreDNS + Envoy configs.
 
     In standalone mode: regenerates from cagent.yaml only
-    In connected mode: fetches allowlist from CP, merges with cagent.yaml
+    In connected mode: fetches domain policies from CP, merges with cagent.yaml
 
     Returns True if configs were updated, False otherwise.
     """
@@ -321,30 +321,22 @@ def sync_config() -> bool:
         return regenerate_configs()
 
     try:
-        # Fetch allowlist from control plane
+        # Fetch domain policies from control plane
         response = requests.get(
-            f"{CONTROL_PLANE_URL}/api/v1/allowlist/export",
-            params={"entry_type": "domain", "format": "hosts"},
+            f"{CONTROL_PLANE_URL}/api/v1/domain-policies",
             headers={"Authorization": f"Bearer {CONTROL_PLANE_TOKEN}"},
             timeout=10
         )
 
         if response.status_code != 200:
-            logger.warning(f"Failed to fetch allowlist: {response.status_code}, using cagent.yaml")
+            logger.warning(f"Failed to fetch domain policies: {response.status_code}, using cagent.yaml")
             return regenerate_configs()
 
-        # Parse CP domains
-        cp_domains = []
-        for line in response.text.strip().split("\n"):
-            line = line.strip()
-            if line and not line.startswith("#"):
-                cp_domains.append(line)
+        # Parse domain policies
+        policies = response.json()
+        cp_domains = [p["domain"] for p in policies if p.get("enabled", True)]
 
-        logger.info(f"Fetched {len(cp_domains)} domains from control plane")
-
-        # TODO: In future, merge CP domains with cagent.yaml domains
-        # For now, CP domains would override cagent.yaml in connected mode
-        # This requires extending ConfigGenerator to accept additional domains
+        logger.info(f"Fetched {len(cp_domains)} domain policies from control plane")
 
         # Regenerate configs (cagent.yaml is still the primary source)
         return regenerate_configs(additional_domains=cp_domains)

@@ -2,14 +2,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type {
   AuditLogFilters,
-  CreateSecretRequest,
-  CreateAllowlistEntryRequest,
-  CreateRateLimitRequest,
-  UpdateRateLimitRequest,
   CreateApiTokenRequest,
   CreateTenantRequest,
   CreateTenantIpAclRequest,
   UpdateTenantIpAclRequest,
+  CreateDomainPolicyRequest,
+  UpdateDomainPolicyRequest,
+  DomainPolicyCredential,
 } from '../types/api';
 
 // Health
@@ -32,90 +31,6 @@ export function useDataPlanes() {
 
 // Alias for useDataPlanes - for use in forms/dropdowns
 export const useAgents = useDataPlanes;
-
-// Secrets
-export function useSecrets() {
-  return useQuery({
-    queryKey: ['secrets'],
-    queryFn: api.getSecrets,
-  });
-}
-
-export function useCreateSecret() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (data: CreateSecretRequest) => api.createSecret(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['secrets'] });
-    },
-  });
-}
-
-export function useRotateSecret() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ name, newValue }: { name: string; newValue: string }) =>
-      api.rotateSecret(name, newValue),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['secrets'] });
-    },
-  });
-}
-
-export function useDeleteSecret() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (name: string) => api.deleteSecret(name),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['secrets'] });
-    },
-  });
-}
-
-// Allowlist
-export function useAllowlist(type?: string) {
-  return useQuery({
-    queryKey: ['allowlist', type],
-    queryFn: () => api.getAllowlist(type),
-  });
-}
-
-export function useAddAllowlistEntry() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (data: CreateAllowlistEntryRequest) =>
-      api.addAllowlistEntry(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['allowlist'] });
-    },
-  });
-}
-
-export function useUpdateAllowlistEntry() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      id,
-      data,
-    }: {
-      id: number;
-      data: Partial<CreateAllowlistEntryRequest>;
-    }) => api.updateAllowlistEntry(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['allowlist'] });
-    },
-  });
-}
-
-export function useDeleteAllowlistEntry() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (id: number) => api.deleteAllowlistEntry(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['allowlist'] });
-    },
-  });
-}
 
 // Audit Logs
 export function useAuditLogs(filters: AuditLogFilters = {}) {
@@ -176,45 +91,6 @@ export function useStartAgent() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agentStatus'] });
       queryClient.invalidateQueries({ queryKey: ['dataPlanes'] });
-    },
-  });
-}
-
-// Rate Limits
-export function useRateLimits() {
-  return useQuery({
-    queryKey: ['rateLimits'],
-    queryFn: api.getRateLimits,
-  });
-}
-
-export function useCreateRateLimit() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (data: CreateRateLimitRequest) => api.createRateLimit(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['rateLimits'] });
-    },
-  });
-}
-
-export function useUpdateRateLimit() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, data }: { id: number; data: UpdateRateLimitRequest }) =>
-      api.updateRateLimit(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['rateLimits'] });
-    },
-  });
-}
-
-export function useDeleteRateLimit() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (id: number) => api.deleteRateLimit(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['rateLimits'] });
     },
   });
 }
@@ -371,6 +247,56 @@ export function useDeleteTenantIpAcl() {
       api.deleteTenantIpAcl(tenantId, aclId),
     onSuccess: (_, { tenantId }) => {
       queryClient.invalidateQueries({ queryKey: ['tenantIpAcls', tenantId] });
+    },
+  });
+}
+
+// Domain Policies
+export function useDomainPolicies(agentId?: string) {
+  return useQuery({
+    queryKey: ['domainPolicies', agentId],
+    queryFn: () => api.getDomainPolicies(agentId),
+  });
+}
+
+export function useCreateDomainPolicy() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: CreateDomainPolicyRequest) => api.createDomainPolicy(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['domainPolicies'] });
+    },
+  });
+}
+
+export function useUpdateDomainPolicy() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: UpdateDomainPolicyRequest }) =>
+      api.updateDomainPolicy(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['domainPolicies'] });
+    },
+  });
+}
+
+export function useDeleteDomainPolicy() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.deleteDomainPolicy(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['domainPolicies'] });
+    },
+  });
+}
+
+export function useRotateDomainPolicyCredential() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, credential }: { id: number; credential: DomainPolicyCredential }) =>
+      api.rotateDomainPolicyCredential(id, credential),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['domainPolicies'] });
     },
   });
 }

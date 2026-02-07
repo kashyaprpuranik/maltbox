@@ -13,52 +13,6 @@ export interface DataPlane {
   last_heartbeat?: string;
 }
 
-export interface Secret {
-  id: number;
-  name: string;
-  domain_pattern?: string;
-  alias?: string;  // e.g., "openai" -> openai.devbox.local
-  header_name?: string;
-  header_format?: string;
-  description?: string;
-  agent_id?: string;
-  created_at: string;
-  last_rotated?: string;
-  rotation_days: number;
-  needs_rotation: boolean;
-}
-
-export interface CreateSecretRequest {
-  name: string;
-  value: string;
-  domain_pattern: string;
-  alias?: string;  // e.g., "openai" -> openai.devbox.local
-  header_name?: string;
-  header_format?: string;
-  description?: string;
-  rotation_days?: number;
-  agent_id?: string;
-}
-
-export interface AllowlistEntry {
-  id: number;
-  entry_type: 'domain' | 'ip' | 'command';
-  value: string;
-  enabled: boolean;
-  description?: string;
-  agent_id?: string;
-  created_at: string;
-  created_by?: string;
-}
-
-export interface CreateAllowlistEntryRequest {
-  entry_type: 'domain' | 'ip' | 'command';
-  value: string;
-  description?: string;
-  enabled?: boolean;
-  agent_id?: string;
-}
-
 export interface AuditLog {
   id: string;
   timestamp: string;
@@ -114,33 +68,6 @@ export interface AgentCommandResponse {
   status: string;
   command: string;
   message: string;
-}
-
-export interface RateLimit {
-  id: number;
-  domain_pattern: string;
-  requests_per_minute: number;
-  burst_size: number;
-  description?: string;
-  agent_id?: string;
-  enabled: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface CreateRateLimitRequest {
-  domain_pattern: string;
-  requests_per_minute?: number;
-  burst_size?: number;
-  description?: string;
-  agent_id?: string;
-}
-
-export interface UpdateRateLimitRequest {
-  requests_per_minute?: number;
-  burst_size?: number;
-  description?: string;
-  enabled?: boolean;
 }
 
 // API Tokens
@@ -264,4 +191,54 @@ export interface LogHit {
   syscall?: string;
   syscall_result?: string;
   [key: string]: unknown;
+}
+
+// Domain Policies (Unified)
+export interface DomainPolicy {
+  id: number;
+  domain: string;
+  alias?: string;
+  description?: string;
+  enabled: boolean;
+  agent_id?: string;
+  allowed_paths: string[];
+  requests_per_minute?: number;
+  burst_size?: number;
+  bytes_per_hour?: number;
+  has_credential: boolean;
+  credential_header?: string;
+  credential_format?: string;
+  credential_rotated_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DomainPolicyCredential {
+  header: string;
+  format: string;
+  value: string;
+}
+
+export interface CreateDomainPolicyRequest {
+  domain: string;
+  alias?: string;
+  description?: string;
+  agent_id?: string;
+  allowed_paths?: string[];
+  requests_per_minute?: number;
+  burst_size?: number;
+  bytes_per_hour?: number;
+  credential?: DomainPolicyCredential;
+}
+
+export interface UpdateDomainPolicyRequest {
+  alias?: string;
+  description?: string;
+  enabled?: boolean;
+  allowed_paths?: string[];
+  requests_per_minute?: number;
+  burst_size?: number;
+  bytes_per_hour?: number;
+  credential?: DomainPolicyCredential;
+  clear_credential?: boolean;
 }

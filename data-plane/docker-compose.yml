@@ -7,18 +7,24 @@
 #   connected:  Use control plane API, fall back to static config
 #
 # Usage:
-#   Standalone mode (default):
-#     docker-compose up -d
+#   Standard mode (default):
+#     docker-compose --profile standard up -d
+#
+#   Secure mode (gVisor - requires installation):
+#     docker-compose --profile secure up -d
 #
 #   With local admin UI:
-#     docker-compose --profile admin up -d
+#     docker-compose --profile standard --profile admin up -d
 #     Open http://localhost:8080
 #
 #   With auditing (log forwarding):
-#     docker-compose --profile auditing up -d
+#     docker-compose --profile standard --profile auditing up -d
 #
 #   With SSH tunnel:
-#     docker-compose --profile ssh up -d
+#     docker-compose --profile standard --profile ssh up -d
+#
+#   Secure mode with admin UI:
+#     docker-compose --profile secure --profile admin up -d
 #
 # Network Architecture:
 #   agent-net (isolated, internal)
@@ -40,6 +46,7 @@ version: '3.8'
 services:
   # ===========================================================================
   # Agent Container (isolated - can only reach envoy and dns-filter)
+  # Use standard profile (default) or secure profile (gVisor)
   # ===========================================================================
   agent:
     build:
@@ -49,10 +56,11 @@ services:
         - VARIANT=${AGENT_VARIANT:-lean}
     image: agent:${AGENT_VARIANT:-lean}
     container_name: agent
+    profiles:
+      - standard
 
     # Container runtime: "runc" (default) or "runsc" (gVisor)
-    # gVisor provides kernel-level isolation - agent syscalls never reach host kernel
-    # Install gVisor: https://gvisor.dev/docs/user_guide/install/
+    # For gVisor, use --profile secure instead
     runtime: ${CONTAINER_RUNTIME:-runc}
 
     # Security hardening (relaxed for SSH - runs as root to start sshd, then drops to user)
@@ -104,6 +112,77 @@ services:
       options:
         max-size: "100m"
         max-file: "5"
+
+    depends_on:
+      - envoy
+      - dns-filter
+
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Agent Container (SECURE - gVisor isolation, stricter limits)
+  # Use with: docker-compose --profile secure up -d
+  # Requires gVisor: https://gvisor.dev/docs/user_guide/install/
+  # ===========================================================================
+  agent-secure:
+    build:
+      context: .
+      dockerfile: agent.Dockerfile
+      args:
+        - VARIANT=${AGENT_VARIANT:-lean}
+    image: agent:${AGENT_VARIANT:-lean}
+    container_name: agent
+    profiles:
+      - secure
+
+    # gVisor runtime - syscalls intercepted in user-space
+    runtime: runsc
+
+    # Strict security options
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:unconfined  # gVisor provides its own syscall filtering
+
+    # Stricter resource limits for secure mode
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+          pids: 128
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+    # DNS forced through dns-filter
+    dns:
+      - 172.30.0.5
+
+    # Environment
+    environment:
+      - HTTP_PROXY=http://172.30.0.10:8443
+      - HTTPS_PROXY=http://172.30.0.10:8443
+      - NO_PROXY=localhost,127.0.0.1
+      - USER_NAME=agent
+      - SSH_AUTHORIZED_KEYS=${SSH_AUTHORIZED_KEYS:-}
+      - TMUX_AUTO_ATTACH=${TMUX_AUTO_ATTACH:-1}
+      - TMUX_SESSION=${TMUX_SESSION:-main}
+
+    # Volumes (more restricted in secure mode)
+    volumes:
+      - agent-logs:/var/log/agent
+      - agent-workspace:/workspace:rw
+
+    # ONLY on agent-net
+    networks:
+      agent-net:
+        ipv4_address: 172.30.0.20
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
     depends_on:
       - envoy

@@ -6,9 +6,9 @@ Secure development environment for AI agents with isolated networking and centra
 
 AI coding agents need network access to be useful—fetching documentation, calling APIs, installing packages. But unrestricted network access creates serious risks:
 
-- **Data exfiltration**: Agent sends proprietary code or secrets to unauthorized endpoints
+- **Data exfiltration**: Agent sends proprietary code or secrets to unauthorized endpoints. Example: [Google's Gemini exfiltrating data via markdown image rendering](https://www.promptarmor.com/resources/google-antigravity-exfiltrates-data)
 - **Credential theft**: Agent extracts API keys from environment and leaks them
-- **Supply chain attacks**: Agent installs malicious packages or executes untrusted code
+- **Supply chain attacks**: Agent installs malicious packages, compromised plugins, or executes untrusted code. Example: [Hundreds of malicious MCP skills discovered in ClawHub](https://www.esecurityplanet.com/threats/hundreds-of-malicious-skills-found-in-openclaws-clawhub/)
 - **Runaway costs**: Agent makes unlimited API calls, racking up unexpected bills
 - **Lateral movement**: Compromised agent pivots to internal services
 
@@ -47,7 +47,20 @@ Maltbox assumes the AI agent is **untrusted by default**. The agent may be:
 - Resource limits (CPU, memory, pids)
 - DNS forced through CoreDNS filter
 - All HTTP(S) traffic forced through Envoy proxy
-- Optional [gVisor](https://gvisor.dev) kernel isolation (`CONTAINER_RUNTIME=runsc`)
+
+### Kernel Isolation (Recommended for Production)
+
+For high-security deployments, use the `secure` profile which enables [gVisor](https://gvisor.dev) to intercept syscalls in user-space:
+
+```bash
+# Install gVisor first: https://gvisor.dev/docs/user_guide/install/
+docker-compose --profile secure --profile admin up -d
+```
+
+The `secure` profile enables:
+- **gVisor runtime** (`runsc`) - agent syscalls never reach host kernel
+- **Stricter resource limits** - 1 CPU, 2GB memory, 128 PIDs (vs 2 CPU, 4GB, 256 PIDs)
+- **Reduced log retention** - smaller attack surface
 
 ### Credential Security
 - Secrets encrypted with Fernet (AES) and stored in Postgres
@@ -97,8 +110,11 @@ Run the data plane without a control plane. Uses local admin UI for management.
 ```bash
 cd data-plane
 
-# Start with local admin UI
-docker-compose --profile admin up -d
+# Start with local admin UI (standard mode)
+docker-compose --profile standard --profile admin up -d
+
+# Or with gVisor for stronger isolation (requires gVisor installed)
+docker-compose --profile secure --profile admin up -d
 
 # Access local admin at http://localhost:8080
 # Features:

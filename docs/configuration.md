@@ -51,19 +51,46 @@ The Local Admin UI at http://localhost:8080 provides a structured editor:
 
 ## Connected Mode: Control Plane
 
-## Adding Allowed Domains
+## Domain Policies (Unified)
 
-Domains can be managed via the Admin UI (http://localhost:9080) or API:
+Domain policies combine all settings for a domain in one place: allowlist, paths, rate limits, egress limits, and credentials.
+
 ```bash
-# Add domain via API
-curl -X POST http://localhost:8002/api/v1/allowlist \
-  -H "Authorization: Bearer dev-token" \
+# Create a domain policy with all settings
+curl -X POST http://localhost:8002/api/v1/domain-policies \
+  -H "Authorization: Bearer admin-token" \
   -H "Content-Type: application/json" \
-  -d '{"entry_type": "domain", "value": "api.openai.com", "description": "OpenAI API"}'
+  -d '{
+    "domain": "api.openai.com",
+    "alias": "openai",
+    "description": "OpenAI API",
+    "allowed_paths": ["/v1/chat/*", "/v1/models", "/v1/embeddings"],
+    "requests_per_minute": 60,
+    "burst_size": 10,
+    "bytes_per_hour": 10485760,
+    "credential": {
+      "header": "Authorization",
+      "format": "Bearer {value}",
+      "value": "sk-..."
+    }
+  }'
+
+# List all domain policies
+curl http://localhost:8002/api/v1/domain-policies \
+  -H "Authorization: Bearer admin-token"
+
+# Update a policy
+curl -X PUT http://localhost:8002/api/v1/domain-policies/1 \
+  -H "Authorization: Bearer admin-token" \
+  -H "Content-Type: application/json" \
+  -d '{"requests_per_minute": 120}'
+
+# Delete a policy
+curl -X DELETE http://localhost:8002/api/v1/domain-policies/1 \
+  -H "Authorization: Bearer admin-token"
 ```
 
-The agent-manager syncs the allowlist from the control plane to CoreDNS every 5 minutes.
-A static fallback allowlist is available at `data-plane/configs/coredns/allowlist.hosts` for when the control plane is unreachable.
+The agent-manager syncs policies from the control plane to CoreDNS (for DNS filtering) and Envoy (for all other policies).
 
 ## Path Filtering
 

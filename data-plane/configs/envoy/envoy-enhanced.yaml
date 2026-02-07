@@ -293,6 +293,7 @@ static_resources:
                         local credential_cache = {}  -- domain -> {header_name, header_value, expires_at}
                         local rate_limit_cache = {}  -- domain -> {rpm, burst, expires_at}
                         local egress_limit_cache = {}  -- domain -> {bytes_per_hour, expires_at}
+                        local domain_policy_cache = {}  -- domain -> {policy, expires_at} (unified cache)
                         local token_buckets = {}     -- domain -> {tokens, last_refill}
 
                         -- Egress volume tracking (in-memory, resets on restart)
@@ -688,7 +689,60 @@ static_resources:
                           return false
                         end
 
-                        -- Get egress limit for domain (with caching, static fallback)
+                        -- Rate limiter with explicit config (for unified policy)
+                        function check_rate_limit_with_config(request_handle, domain, rpm, burst)
+                          local host_clean = string.match(domain, "^([^:]+)") or domain
+                          local now = os.time()
+                          local bucket = token_buckets[host_clean]
+
+                          if not bucket then
+                            bucket = {
+                              tokens = burst,
+                              last_refill = now
+                            }
+                            token_buckets[host_clean] = bucket
+                          end
+
+                          -- Refill tokens
+                          local elapsed = now - bucket.last_refill
+                          local tokens_per_second = rpm / 60.0
+                          local new_tokens = elapsed * tokens_per_second
+                          bucket.tokens = math.min(burst, bucket.tokens + new_tokens)
+                          bucket.last_refill = now
+
+                          if bucket.tokens >= 1 then
+                            bucket.tokens = bucket.tokens - 1
+                            return true
+                          end
+
+                          request_handle:logWarn(string.format(
+                            "Rate limit exceeded for %s (limit: %d rpm)",
+                            host_clean, rpm
+                          ))
+                          return false
+                        end
+
+                        -- Egress limit check with explicit config (for unified policy)
+                        function check_egress_limit_with_config(request_handle, domain, bytes_limit)
+                          local host_clean = string.match(domain, "^([^:]+)") or domain
+                          local now = os.time()
+
+                          local tracker = egress_bytes[host_clean]
+                          if not tracker then
+                            tracker = { bytes = 0, window_start = now }
+                            egress_bytes[host_clean] = tracker
+                          end
+
+                          -- Reset window if expired
+                          if (now - tracker.window_start) >= EGRESS_WINDOW_SECONDS then
+                            tracker.bytes = 0
+                            tracker.window_start = now
+                          end
+
+                          return tracker.bytes < bytes_limit, tracker.bytes
+                        end
+
+                        -- Get egress limit for domain (with caching, static fallback) - DEPRECATED
                         function get_egress_limit(request_handle, domain)
                           load_static_config(request_handle)
                           local host_clean = string.match(domain, "^([^:]+)") or domain
@@ -809,10 +863,175 @@ static_resources:
                           end
                         end
 
+                        -- =======================================================================
+                        -- Unified Domain Policy (single CP call for all policies)
+                        -- =======================================================================
+
+                        function get_domain_policy(request_handle, domain)
+                          load_static_config(request_handle)
+                          local host_clean = string.match(domain, "^([^:]+)") or domain
+
+                          -- Check cache first
+                          local cached = domain_policy_cache[host_clean]
+                          if cached and cached.expires_at > os.time() then
+                            return cached.policy
+                          end
+
+                          local policy = nil
+
+                          -- Try control plane first
+                          if should_contact_cp() then
+                            local headers, body = request_handle:httpCall(
+                              "control_plane_api",
+                              {
+                                [":method"] = "GET",
+                                [":path"] = "/api/v1/domain-policies/for-domain?domain=" .. url_encode(host_clean),
+                                [":authority"] = "control-plane-api",
+                                ["authorization"] = "Bearer " .. API_TOKEN
+                              },
+                              "",
+                              5000,
+                              false
+                            )
+
+                            if body and string.len(body) > 0 then
+                              mark_cp_success()
+                              policy = parse_domain_policy_response(body)
+                            else
+                              mark_cp_failure()
+                            end
+                          end
+
+                          -- Fall back to static config if no CP response
+                          if not policy then
+                            policy = build_static_policy(host_clean)
+                          end
+
+                          -- Cache the result
+                          domain_policy_cache[host_clean] = {
+                            policy = policy,
+                            expires_at = os.time() + CACHE_TTL_SECONDS
+                          }
+
+                          return policy
+                        end
+
+                        function parse_domain_policy_response(body)
+                          if not body or body == "" then
+                            return nil
+                          end
+
+                          local policy = {
+                            matched = string.match(body, '"matched"%s*:%s*true') ~= nil,
+                            allowed_paths = {},
+                            requests_per_minute = tonumber(string.match(body, '"requests_per_minute"%s*:%s*(%d+)')) or 120,
+                            burst_size = tonumber(string.match(body, '"burst_size"%s*:%s*(%d+)')) or 20,
+                            bytes_per_hour = tonumber(string.match(body, '"bytes_per_hour"%s*:%s*(%d+)')) or DEFAULT_EGRESS_LIMIT,
+                            credential = nil,
+                            target_domain = nil
+                          }
+
+                          -- Parse allowed_paths array
+                          local paths_str = string.match(body, '"allowed_paths"%s*:%s*%[([^%]]*)%]')
+                          if paths_str then
+                            for path in string.gmatch(paths_str, '"([^"]+)"') do
+                              table.insert(policy.allowed_paths, path)
+                            end
+                          end
+
+                          -- Parse credential
+                          local cred_header = string.match(body, '"header_name"%s*:%s*"([^"]*)"')
+                          local cred_value = string.match(body, '"header_value"%s*:%s*"([^"]*)"')
+                          local target = string.match(body, '"target_domain"%s*:%s*"([^"]*)"')
+                          if cred_header and cred_value then
+                            policy.credential = {
+                              header_name = cred_header,
+                              header_value = cred_value
+                            }
+                            policy.target_domain = target
+                          end
+
+                          -- Parse alias for domain rewriting
+                          local alias = string.match(body, '"alias"%s*:%s*"([^"]*)"')
+                          if alias then
+                            policy.alias = alias
+                          end
+
+                          return policy
+                        end
+
+                        function build_static_policy(domain)
+                          -- Build policy from static config
+                          local policy = {
+                            matched = false,
+                            allowed_paths = {},
+                            requests_per_minute = 120,
+                            burst_size = 20,
+                            bytes_per_hour = DEFAULT_EGRESS_LIMIT,
+                            credential = nil,
+                            target_domain = nil
+                          }
+
+                          -- Check static rate limits
+                          local rl = static_rate_limits[domain] or static_rate_limits["default"]
+                          if rl then
+                            policy.requests_per_minute = rl.requests_per_minute or 120
+                            policy.burst_size = rl.burst_size or 20
+                            policy.matched = true
+                          end
+
+                          -- Check static egress limits
+                          local el = static_egress_limits[domain] or static_egress_limits["default"]
+                          if el then
+                            policy.bytes_per_hour = el
+                          end
+
+                          -- Check static credentials
+                          local cred = static_credentials[domain]
+                          if cred then
+                            policy.credential = {
+                              header_name = cred.header_name,
+                              header_value = cred.header_value
+                            }
+                            policy.target_domain = cred.target_domain
+                            policy.matched = true
+                          end
+
+                          return policy
+                        end
+
+                        function match_path_pattern(pattern, path)
+                          if string.sub(pattern, -2) == "/*" then
+                            local prefix = string.sub(pattern, 1, -2)
+                            return string.sub(path, 1, string.len(prefix)) == prefix
+                          elseif string.sub(pattern, -1) == "*" then
+                            local prefix = string.sub(pattern, 1, -2)
+                            return string.sub(path, 1, string.len(prefix)) == prefix
+                          else
+                            return path == pattern
+                          end
+                        end
+
+                        function is_path_allowed(policy, path)
+                          -- No paths defined = all paths allowed
+                          if not policy.allowed_paths or #policy.allowed_paths == 0 then
+                            return true, "no_restrictions"
+                          end
+
+                          -- Check each pattern
+                          for _, pattern in ipairs(policy.allowed_paths) do
+                            if match_path_pattern(pattern, path) then
+                              return true, pattern
+                            end
+                          end
+
+                          return false, "path_not_in_allowlist"
+                        end
+
                         -- Path allowlist cache: domain:path -> {allowed, expires_at}
                         local path_allowed_cache = {}
 
-                        -- Check if path is allowed for domain (with caching)
+                        -- Check if path is allowed for domain (with caching) - DEPRECATED, use get_domain_policy
                         function check_path_allowed(request_handle, domain, path)
                           local host_clean = string.match(domain, "^([^:]+)") or domain
                           local cache_key = host_clean .. ":" .. path
@@ -894,16 +1113,17 @@ static_resources:
                             end
                           end
 
-                          -- Credential lookup (handles both real domains and devbox.local aliases)
-                          -- For devbox.local aliases, CP returns target_domain with the real domain
-                          local cred = get_credential(request_handle, host_clean)
+                          -- Get unified domain policy (single CP call for all policies)
+                          local policy = get_domain_policy(request_handle, host_clean)
                           local real_domain = host_clean
-                          if cred and cred.target_domain then
-                            real_domain = cred.target_domain
+                          if policy and policy.target_domain then
+                            real_domain = policy.target_domain
                           end
 
-                          -- Rate limiting (use real domain for lookup)
-                          if not check_rate_limit(request_handle, real_domain) then
+                          -- Rate limiting using policy
+                          local rpm = policy and policy.requests_per_minute or 120
+                          local burst = policy and policy.burst_size or 20
+                          if not check_rate_limit_with_config(request_handle, real_domain, rpm, burst) then
                             rate_limited = "true"
                             request_handle:headers():add("X-Rate-Limited", rate_limited)
                             request_handle:respond(
@@ -913,11 +1133,10 @@ static_resources:
                             return
                           end
 
-                          -- Path allowlist check (only in connected mode with path restrictions)
+                          -- Path allowlist check using policy
                           local request_path = request_handle:headers():get(":path") or "/"
-                          -- Strip query string for path matching
                           local path_only = string.match(request_path, "^([^?]+)") or request_path
-                          local path_allowed, path_reason = check_path_allowed(request_handle, real_domain, path_only)
+                          local path_allowed, path_reason = is_path_allowed(policy, path_only)
                           if not path_allowed then
                             request_handle:logWarn(string.format(
                               "Path not allowed: %s%s (reason: %s)",
@@ -930,12 +1149,13 @@ static_resources:
                             return
                           end
 
-                          -- Egress volume limit check
-                          local egress_allowed, current_bytes, egress_limit = check_egress_limit(request_handle, real_domain)
+                          -- Egress volume limit check using policy
+                          local bytes_limit = policy and policy.bytes_per_hour or DEFAULT_EGRESS_LIMIT
+                          local egress_allowed, current_bytes = check_egress_limit_with_config(request_handle, real_domain, bytes_limit)
                           if not egress_allowed then
                             request_handle:logWarn(string.format(
                               "Egress limit exceeded for %s: %d / %d bytes",
-                              real_domain, current_bytes, egress_limit
+                              real_domain, current_bytes, bytes_limit
                             ))
                             request_handle:respond(
                               {[":status"] = "429", ["retry-after"] = "3600"},
@@ -947,14 +1167,14 @@ static_resources:
                           -- Store domain for response handler to track bytes
                           request_domain = real_domain
 
-                          -- Credential injection
-                          if cred and cred.header_name and cred.header_value then
-                            request_handle:headers():remove(cred.header_name)
-                            request_handle:headers():add(cred.header_name, cred.header_value)
+                          -- Credential injection using policy
+                          if policy and policy.credential and policy.credential.header_name and policy.credential.header_value then
+                            request_handle:headers():remove(policy.credential.header_name)
+                            request_handle:headers():add(policy.credential.header_name, policy.credential.header_value)
                             credential_injected = "true"
                             request_handle:logInfo(string.format(
                               "Injected credential for %s (via %s): %s",
-                              real_domain, host, cred.header_name
+                              real_domain, host, policy.credential.header_name
                             ))
                           end
 

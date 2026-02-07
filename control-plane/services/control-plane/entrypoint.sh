@@ -135,6 +135,39 @@ with engine.connect() as conn:
         conn.execute(text('CREATE INDEX ix_allowed_paths_allowlist_entry_id ON allowed_paths(allowlist_entry_id)'))
         conn.commit()
 
+    # Create domain_policies table if missing (unified model)
+    result = conn.execute(text(\"\"\"
+        SELECT table_name FROM information_schema.tables
+        WHERE table_name = 'domain_policies'
+    \"\"\"))
+    if not result.fetchone():
+        print('Creating domain_policies table...')
+        conn.execute(text('''
+            CREATE TABLE domain_policies (
+                id SERIAL PRIMARY KEY,
+                domain VARCHAR(200) NOT NULL,
+                alias VARCHAR(50),
+                description VARCHAR(500),
+                enabled BOOLEAN DEFAULT TRUE,
+                agent_id VARCHAR(100),
+                allowed_paths JSON DEFAULT '[]',
+                requests_per_minute INTEGER,
+                burst_size INTEGER,
+                bytes_per_hour INTEGER,
+                credential_header VARCHAR(100),
+                credential_format VARCHAR(100),
+                credential_value_encrypted TEXT,
+                credential_rotated_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(domain, agent_id)
+            )
+        '''))
+        conn.execute(text('CREATE INDEX ix_domain_policies_domain ON domain_policies(domain)'))
+        conn.execute(text('CREATE INDEX ix_domain_policies_agent_id ON domain_policies(agent_id)'))
+        conn.execute(text('CREATE INDEX ix_domain_policies_enabled ON domain_policies(enabled)'))
+        conn.commit()
+
     # Fix seed tokens - ensure correct is_super_admin and tenant_id
     # Get default tenant id first
     result = conn.execute(text(\"\"\"

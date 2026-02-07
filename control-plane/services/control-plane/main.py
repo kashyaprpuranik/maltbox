@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import RedirectResponse
 from starlette.websockets import WebSocketState
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Boolean, ForeignKey, UniqueConstraint
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Boolean, ForeignKey, UniqueConstraint, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship, joinedload
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -158,18 +158,53 @@ class RateLimit(Base):
 
 
 class EgressLimit(Base):
-    """Per-domain egress volume limits (bytes per hour)."""
+    """Per-domain egress volume limits (bytes per hour). DEPRECATED: Use DomainPolicy."""
     __tablename__ = "egress_limits"
 
     id = Column(Integer, primary_key=True, index=True)
-    domain_pattern = Column(String(200), index=True)  # e.g., "api.openai.com", "*.github.com"
-    bytes_per_hour = Column(Integer, default=104857600)  # 100MB default
+    domain_pattern = Column(String(200), index=True)
+    bytes_per_hour = Column(Integer, default=104857600)
     description = Column(String(500))
     enabled = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    # Per-agent scoping: NULL = global (applies to all agents)
     agent_id = Column(String(100), nullable=True, index=True)
+
+
+class DomainPolicy(Base):
+    """Unified domain policy: allowlist + paths + rate limits + egress limits + credentials."""
+    __tablename__ = "domain_policies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    domain = Column(String(200), nullable=False, index=True)  # e.g., "api.openai.com", "*.github.com"
+    alias = Column(String(50))  # e.g., "openai" -> openai.devbox.local
+    description = Column(String(500))
+    enabled = Column(Boolean, default=True, index=True)
+    agent_id = Column(String(100), nullable=True, index=True)  # NULL = global
+
+    # Path restrictions (JSON array of patterns, empty = all paths allowed)
+    allowed_paths = Column(JSON, default=list)  # ["/v1/chat/*", "/v1/models"]
+
+    # Rate limiting (NULL = use defaults)
+    requests_per_minute = Column(Integer)
+    burst_size = Column(Integer)
+
+    # Egress limiting (NULL = use defaults)
+    bytes_per_hour = Column(Integer)
+
+    # Credential injection (all NULL = no credential)
+    credential_header = Column(String(100))  # e.g., "Authorization", "x-api-key"
+    credential_format = Column(String(100))  # e.g., "Bearer {value}", "{value}"
+    credential_value_encrypted = Column(Text)  # Fernet-encrypted secret
+    credential_rotated_at = Column(DateTime)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        # Unique constraint: one policy per domain per agent scope
+        UniqueConstraint('domain', 'agent_id', name='uq_domain_policy'),
+    )
 
 
 class AgentState(Base):
@@ -494,6 +529,74 @@ class EgressLimitResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     agent_id: Optional[str] = None  # NULL = global
+
+    class Config:
+        from_attributes = True
+
+
+# =============================================================================
+# Domain Policy Models (Unified)
+# =============================================================================
+
+class DomainPolicyCredential(BaseModel):
+    """Credential configuration for a domain."""
+    header: str = "Authorization"  # Header name
+    format: str = "Bearer {value}"  # Format string
+    value: str  # Plain text value (encrypted at rest)
+
+
+class DomainPolicyCreate(BaseModel):
+    """Create a new domain policy."""
+    domain: str  # e.g., "api.openai.com", "*.github.com"
+    alias: Optional[str] = None  # e.g., "openai" -> openai.devbox.local
+    description: Optional[str] = None
+    agent_id: Optional[str] = None  # NULL = global
+
+    # Path restrictions (empty = all paths allowed)
+    allowed_paths: Optional[List[str]] = None  # ["/v1/chat/*", "/v1/models"]
+
+    # Rate limiting
+    requests_per_minute: Optional[int] = None
+    burst_size: Optional[int] = None
+
+    # Egress limiting
+    bytes_per_hour: Optional[int] = None
+
+    # Credential (optional)
+    credential: Optional[DomainPolicyCredential] = None
+
+
+class DomainPolicyUpdate(BaseModel):
+    """Update an existing domain policy."""
+    alias: Optional[str] = None
+    description: Optional[str] = None
+    enabled: Optional[bool] = None
+    allowed_paths: Optional[List[str]] = None
+    requests_per_minute: Optional[int] = None
+    burst_size: Optional[int] = None
+    bytes_per_hour: Optional[int] = None
+    credential: Optional[DomainPolicyCredential] = None
+    clear_credential: Optional[bool] = None  # Set to true to remove credential
+
+
+class DomainPolicyResponse(BaseModel):
+    """Domain policy response (credential value hidden)."""
+    id: int
+    domain: str
+    alias: Optional[str]
+    description: Optional[str]
+    enabled: bool
+    agent_id: Optional[str]
+    allowed_paths: List[str]
+    requests_per_minute: Optional[int]
+    burst_size: Optional[int]
+    bytes_per_hour: Optional[int]
+    has_credential: bool  # True if credential configured
+    credential_header: Optional[str]
+    credential_format: Optional[str]
+    credential_rotated_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True
@@ -2070,6 +2173,267 @@ async def get_egress_limit_for_domain(
         "matched": False,
         "domain": domain,
         "bytes_per_hour": default_bytes
+    }
+
+
+# =============================================================================
+# Domain Policy Endpoints (Unified)
+# =============================================================================
+
+def domain_policy_to_response(policy: DomainPolicy) -> dict:
+    """Convert DomainPolicy to response dict with has_credential flag."""
+    return {
+        "id": policy.id,
+        "domain": policy.domain,
+        "alias": policy.alias,
+        "description": policy.description,
+        "enabled": policy.enabled,
+        "agent_id": policy.agent_id,
+        "allowed_paths": policy.allowed_paths or [],
+        "requests_per_minute": policy.requests_per_minute,
+        "burst_size": policy.burst_size,
+        "bytes_per_hour": policy.bytes_per_hour,
+        "has_credential": policy.credential_value_encrypted is not None,
+        "credential_header": policy.credential_header,
+        "credential_format": policy.credential_format,
+        "credential_rotated_at": policy.credential_rotated_at,
+        "created_at": policy.created_at,
+        "updated_at": policy.updated_at,
+    }
+
+
+@app.get("/api/v1/domain-policies", response_model=List[DomainPolicyResponse])
+async def list_domain_policies(
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin_role),
+    agent_id: Optional[str] = None
+):
+    """List all domain policies. Optionally filter by agent_id."""
+    query = db.query(DomainPolicy)
+
+    if agent_id:
+        query = query.filter(
+            (DomainPolicy.agent_id == agent_id) | (DomainPolicy.agent_id.is_(None))
+        )
+
+    policies = query.order_by(DomainPolicy.domain).all()
+    return [domain_policy_to_response(p) for p in policies]
+
+
+@app.post("/api/v1/domain-policies", response_model=DomainPolicyResponse)
+async def create_domain_policy(
+    request: Request,
+    policy: DomainPolicyCreate,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
+):
+    """Create a new domain policy."""
+    # Check for duplicates
+    existing = db.query(DomainPolicy).filter(
+        DomainPolicy.domain == policy.domain,
+        DomainPolicy.agent_id == policy.agent_id
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Policy for this domain already exists")
+
+    # Encrypt credential if provided
+    encrypted_value = None
+    if policy.credential:
+        encrypted_value = encrypt_value(policy.credential.value)
+
+    db_policy = DomainPolicy(
+        domain=policy.domain,
+        alias=policy.alias,
+        description=policy.description,
+        agent_id=policy.agent_id,
+        allowed_paths=policy.allowed_paths or [],
+        requests_per_minute=policy.requests_per_minute,
+        burst_size=policy.burst_size,
+        bytes_per_hour=policy.bytes_per_hour,
+        credential_header=policy.credential.header if policy.credential else None,
+        credential_format=policy.credential.format if policy.credential else None,
+        credential_value_encrypted=encrypted_value,
+        credential_rotated_at=datetime.utcnow() if policy.credential else None,
+    )
+    db.add(db_policy)
+    db.commit()
+    db.refresh(db_policy)
+    return domain_policy_to_response(db_policy)
+
+
+@app.get("/api/v1/domain-policies/{policy_id}", response_model=DomainPolicyResponse)
+async def get_domain_policy(
+    policy_id: int,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin_role)
+):
+    """Get a domain policy by ID."""
+    policy = db.query(DomainPolicy).filter(DomainPolicy.id == policy_id).first()
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    return domain_policy_to_response(policy)
+
+
+@app.put("/api/v1/domain-policies/{policy_id}", response_model=DomainPolicyResponse)
+async def update_domain_policy(
+    request: Request,
+    policy_id: int,
+    update: DomainPolicyUpdate,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
+):
+    """Update a domain policy."""
+    policy = db.query(DomainPolicy).filter(DomainPolicy.id == policy_id).first()
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+
+    # Update fields if provided
+    if update.alias is not None:
+        policy.alias = update.alias
+    if update.description is not None:
+        policy.description = update.description
+    if update.enabled is not None:
+        policy.enabled = update.enabled
+    if update.allowed_paths is not None:
+        policy.allowed_paths = update.allowed_paths
+    if update.requests_per_minute is not None:
+        policy.requests_per_minute = update.requests_per_minute
+    if update.burst_size is not None:
+        policy.burst_size = update.burst_size
+    if update.bytes_per_hour is not None:
+        policy.bytes_per_hour = update.bytes_per_hour
+
+    # Handle credential update
+    if update.clear_credential:
+        policy.credential_header = None
+        policy.credential_format = None
+        policy.credential_value_encrypted = None
+        policy.credential_rotated_at = None
+    elif update.credential:
+        policy.credential_header = update.credential.header
+        policy.credential_format = update.credential.format
+        policy.credential_value_encrypted = encrypt_value(update.credential.value)
+        policy.credential_rotated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(policy)
+    return domain_policy_to_response(policy)
+
+
+@app.delete("/api/v1/domain-policies/{policy_id}")
+async def delete_domain_policy(
+    request: Request,
+    policy_id: int,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
+):
+    """Delete a domain policy."""
+    policy = db.query(DomainPolicy).filter(DomainPolicy.id == policy_id).first()
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+
+    db.delete(policy)
+    db.commit()
+    return {"deleted": True, "id": policy_id}
+
+
+@app.get("/api/v1/domain-policies/for-domain")
+@limiter.limit("120/minute")
+async def get_policy_for_domain(
+    request: Request,
+    domain: str,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(verify_token)
+):
+    """Get complete policy for a domain (used by Envoy).
+
+    Returns all policy settings: paths, rate limits, egress limits, credentials.
+    Agent tokens receive policies scoped to their agent + global policies.
+    """
+    query = db.query(DomainPolicy).filter(DomainPolicy.enabled == True)
+
+    # Agent tokens only see their agent's policies + global policies
+    if token_info.token_type == "agent" and token_info.agent_id:
+        query = query.filter(
+            (DomainPolicy.agent_id == token_info.agent_id) | (DomainPolicy.agent_id.is_(None))
+        )
+
+    policies = query.all()
+
+    # Find matching policy (agent-specific takes precedence)
+    matching_policy = None
+    for policy in policies:
+        if match_domain(policy.domain, domain):
+            if matching_policy is None or (policy.agent_id is not None and matching_policy.agent_id is None):
+                matching_policy = policy
+
+    if not matching_policy:
+        # Return defaults
+        default_rpm = int(os.environ.get('DEFAULT_RATE_LIMIT_RPM', '120'))
+        default_burst = int(os.environ.get('DEFAULT_RATE_LIMIT_BURST', '20'))
+        default_bytes = int(os.environ.get('DEFAULT_EGRESS_LIMIT_BYTES', '104857600'))
+        return {
+            "matched": False,
+            "domain": domain,
+            "allowed_paths": [],
+            "requests_per_minute": default_rpm,
+            "burst_size": default_burst,
+            "bytes_per_hour": default_bytes,
+            "credential": None
+        }
+
+    # Build response with decrypted credential
+    result = {
+        "matched": True,
+        "domain": matching_policy.domain,
+        "alias": matching_policy.alias,
+        "allowed_paths": matching_policy.allowed_paths or [],
+        "requests_per_minute": matching_policy.requests_per_minute or int(os.environ.get('DEFAULT_RATE_LIMIT_RPM', '120')),
+        "burst_size": matching_policy.burst_size or int(os.environ.get('DEFAULT_RATE_LIMIT_BURST', '20')),
+        "bytes_per_hour": matching_policy.bytes_per_hour or int(os.environ.get('DEFAULT_EGRESS_LIMIT_BYTES', '104857600')),
+        "credential": None
+    }
+
+    # Include credential if present
+    if matching_policy.credential_value_encrypted:
+        try:
+            decrypted = decrypt_value(matching_policy.credential_value_encrypted)
+            formatted_value = matching_policy.credential_format.replace("{value}", decrypted)
+            result["credential"] = {
+                "header_name": matching_policy.credential_header,
+                "header_value": formatted_value,
+                "target_domain": matching_policy.domain if not matching_policy.domain.startswith("*") else None
+            }
+        except Exception as e:
+            # Log error but don't fail request
+            pass
+
+    return result
+
+
+@app.get("/api/v1/domain-policies/export")
+async def export_domain_policies(
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(verify_token)
+):
+    """Export all domains for CoreDNS allowlist.
+
+    Returns list of domains (without credentials) for DNS filtering.
+    """
+    query = db.query(DomainPolicy).filter(DomainPolicy.enabled == True)
+
+    # Agent tokens only see their agent's policies + global policies
+    if token_info.token_type == "agent" and token_info.agent_id:
+        query = query.filter(
+            (DomainPolicy.agent_id == token_info.agent_id) | (DomainPolicy.agent_id.is_(None))
+        )
+
+    policies = query.all()
+    domains = [p.domain for p in policies]
+
+    return {
+        "domains": domains,
+        "generated_at": datetime.utcnow().isoformat()
     }
 
 

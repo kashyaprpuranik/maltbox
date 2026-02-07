@@ -45,7 +45,7 @@ The data plane provides a secure, isolated execution environment for AI agents w
 
 ## Operation Modes
 
-### Connected Mode (with Control Plane)
+### Control Plane Mode
 
 Features:
 - Credentials, rate limits, allowlist synced from control plane
@@ -56,10 +56,28 @@ Features:
 ```bash
 export CONTROL_PLANE_URL=http://<control-plane-ip>:8002
 export CONTROL_PLANE_TOKEN=your-token
-docker-compose up -d
+docker-compose --profile standard --profile managed up -d
 ```
 
-### Standalone Mode (Local Admin UI)
+### Standalone Mode
+
+#### Minimal (Static Config)
+
+Lightweight 3-container setup. Edit `coredns/Corefile` and `envoy/envoy.yaml` directly.
+
+```bash
+docker-compose --profile standard up -d
+```
+
+#### Managed (With Admin UI)
+
+Adds agent-manager (watches `maltbox.yaml`) and local admin UI.
+
+```bash
+docker-compose --profile standard --profile admin up -d
+
+# Access at http://localhost:8080
+```
 
 Features:
 - **Local Admin UI** at http://localhost:8080 with:
@@ -71,13 +89,6 @@ Features:
   - SSH tunnel setup (Auto-STCP)
 - Single `maltbox.yaml` configuration file
 - No external dependencies
-
-```bash
-# Start with local admin UI
-docker-compose --profile admin up -d
-
-# Access at http://localhost:8080
-```
 
 ## Local Admin UI Features
 
@@ -143,25 +154,37 @@ domains:
     read_only: true         # Block POST/PUT/DELETE
 ```
 
-The agent-manager watches `maltbox.yaml` and regenerates CoreDNS Corefile and Envoy config on changes.
+With `--profile managed` or `--profile admin`, agent-manager watches `maltbox.yaml` and regenerates CoreDNS/Envoy configs on changes. Without it, edit configs directly.
 
 ## Docker Compose Profiles
 
+| Profile | Services Added |
+|---------|----------------|
+| `standard` | agent (runc runtime) |
+| `secure` | agent (gVisor runtime) |
+| `managed` | agent-manager |
+| `admin` | agent-manager + local-admin UI |
+| `auditing` | vector (log shipping) |
+| `ssh` | frpc (STCP tunnel) |
+
 ```bash
-# Base services (agent, envoy, dns-filter, agent-manager)
-docker compose up -d
+# Minimal static config (agent + envoy + coredns only)
+docker compose --profile standard up -d
 
-# With local admin UI (standalone mode)
-docker compose --profile admin up -d
+# With agent-manager (watches maltbox.yaml)
+docker compose --profile standard --profile managed up -d
 
-# With audit logging (adds vector → OpenObserve)
-docker compose --profile auditing up -d
+# With local admin UI (includes agent-manager)
+docker compose --profile standard --profile admin up -d
+
+# With gVisor isolation (requires gVisor installed)
+docker compose --profile secure --profile admin up -d
+
+# With audit logging
+docker compose --profile standard --profile admin --profile auditing up -d
 
 # With SSH access via STCP tunnel
-docker compose --profile ssh up -d
-
-# Combined
-docker compose --profile admin --profile ssh up -d
+docker compose --profile standard --profile admin --profile ssh up -d
 ```
 
 ## SSH Access
@@ -221,15 +244,15 @@ AGENT_VARIANT=lean  # or dev, ml
 
 ## Services
 
-| Service | Port | Network | Description |
-|---------|------|---------|-------------|
-| agent | 22 | agent-net | Isolated execution environment with SSH |
-| envoy-proxy | 8443 | agent-net, infra-net | Egress proxy with credential injection |
-| dns-filter | 53 | agent-net, infra-net | CoreDNS with domain allowlist |
-| agent-manager | - | infra-net | Container lifecycle, config generation |
-| local-admin | 8080 | infra-net | Web UI for standalone mode (optional) |
-| vector | - | infra-net | Log collection (optional) |
-| frpc | - | agent-net, infra-net | FRP client for STCP tunnel (optional) |
+| Service | Port | Network | Profile | Description |
+|---------|------|---------|---------|-------------|
+| agent | 22 | agent-net | standard/secure | Isolated execution environment |
+| envoy-proxy | 8443 | agent-net, infra-net | - | Egress proxy with credential injection |
+| dns-filter | 53 | agent-net, infra-net | - | CoreDNS with domain allowlist |
+| agent-manager | - | infra-net | managed/admin | Config watching and regeneration |
+| local-admin | 8080 | infra-net | admin | Web UI for standalone mode |
+| vector | - | infra-net | auditing | Log shipping to OpenObserve |
+| frpc | - | agent-net, infra-net | ssh | FRP client for STCP tunnel |
 
 ## Files
 

@@ -2,7 +2,7 @@
 Local Admin API - Lightweight management API for standalone data plane.
 
 Provides:
-- Config management (read/write maltbox.yaml)
+- Config management (read/write cagent.yaml)
 - Container status and control
 - Log streaming
 - No authentication (localhost only)
@@ -25,7 +25,7 @@ from pydantic import BaseModel
 import docker
 
 # Configuration
-MALTBOX_CONFIG_PATH = os.environ.get("MALTBOX_CONFIG_PATH", "/etc/maltbox/maltbox.yaml")
+CAGENT_CONFIG_PATH = os.environ.get("CAGENT_CONFIG_PATH", "/etc/cagent/cagent.yaml")
 AGENT_CONTAINER_NAME = os.environ.get("AGENT_CONTAINER_NAME", "agent")
 COREDNS_CONTAINER_NAME = os.environ.get("COREDNS_CONTAINER_NAME", "dns-filter")
 ENVOY_CONTAINER_NAME = os.environ.get("ENVOY_CONTAINER_NAME", "envoy-proxy")
@@ -33,7 +33,7 @@ FRPC_CONTAINER_NAME = os.environ.get("FRPC_CONTAINER_NAME", "frpc")
 DATA_PLANE_DIR = os.environ.get("DATA_PLANE_DIR", "/app/data-plane")
 
 app = FastAPI(
-    title="Maltbox Local Admin",
+    title="Cagent Local Admin",
     description="Local management API for standalone data plane",
     version="1.0.0"
 )
@@ -165,7 +165,7 @@ async def info():
     """System info."""
     return {
         "mode": "standalone",
-        "config_path": MALTBOX_CONFIG_PATH,
+        "config_path": CAGENT_CONFIG_PATH,
         "data_plane_dir": DATA_PLANE_DIR,
         "containers": {
             "agent": AGENT_CONTAINER_NAME,
@@ -182,10 +182,10 @@ async def info():
 
 @app.get("/api/config")
 async def get_config():
-    """Get current maltbox.yaml configuration."""
-    config_path = Path(MALTBOX_CONFIG_PATH)
+    """Get current cagent.yaml configuration."""
+    config_path = Path(CAGENT_CONFIG_PATH)
     if not config_path.exists():
-        raise HTTPException(404, f"Config file not found: {MALTBOX_CONFIG_PATH}")
+        raise HTTPException(404, f"Config file not found: {CAGENT_CONFIG_PATH}")
 
     content = config_path.read_text()
     config = yaml.safe_load(content)
@@ -200,8 +200,8 @@ async def get_config():
 
 @app.put("/api/config")
 async def update_config(update: ConfigUpdate):
-    """Update maltbox.yaml configuration."""
-    config_path = Path(MALTBOX_CONFIG_PATH)
+    """Update cagent.yaml configuration."""
+    config_path = Path(CAGENT_CONFIG_PATH)
 
     # Read current config
     if config_path.exists():
@@ -228,8 +228,8 @@ async def update_config(update: ConfigUpdate):
 
 @app.put("/api/config/raw")
 async def update_config_raw(body: dict):
-    """Update maltbox.yaml with raw YAML content."""
-    config_path = Path(MALTBOX_CONFIG_PATH)
+    """Update cagent.yaml with raw YAML content."""
+    config_path = Path(CAGENT_CONFIG_PATH)
     content = body.get("content", "")
 
     # Validate YAML

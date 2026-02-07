@@ -1,4 +1,4 @@
-# Maltbox - Data Plane
+# Cagent - Data Plane
 
 The data plane provides a secure, isolated execution environment for AI agents with controlled network egress, credential injection, and audit logging.
 
@@ -45,7 +45,7 @@ Adds agent-manager and local admin UI for browser-based management.
 │  └─────────────────────────────────────────────────────────────┘│
 │                              │                                   │
 │  ┌──────────────┐    ┌──────┴──────┐                            │
-│  │Agent Manager │◄───│ maltbox.yaml│──── generates ───┐         │
+│  │Agent Manager │◄───│ cagent.yaml│──── generates ───┐         │
 │  └──────────────┘    └─────────────┘                  │         │
 │                                                       ▼         │
 │  ┌─────────────────────────────────────────────────────────────┐│
@@ -104,7 +104,7 @@ Adds Vector for log shipping and connects to centralized control plane.
 - **Audit Logging**: All requests logged with optional forwarding to OpenObserve
 - **Standalone Mode**: Run without control plane using local admin UI
 - **Web Terminal**: Browser-based shell access to containers
-- **Unified Configuration**: Single `maltbox.yaml` generates CoreDNS and Envoy configs
+- **Unified Configuration**: Single `cagent.yaml` generates CoreDNS and Envoy configs
 
 ## Operation Modes
 
@@ -138,7 +138,7 @@ docker-compose --profile dev up -d
 
 #### Managed (With Admin UI)
 
-Adds agent-manager (watches `maltbox.yaml`) and local admin UI.
+Adds agent-manager (watches `cagent.yaml`) and local admin UI.
 
 ```bash
 # With gVisor (recommended)
@@ -158,7 +158,7 @@ Features:
   - Log viewer with traffic analytics
   - Browser-based web terminal
   - SSH tunnel setup (Auto-STCP)
-- Single `maltbox.yaml` configuration file
+- Single `cagent.yaml` configuration file
 - No external dependencies
 
 ## Local Admin UI Features
@@ -180,14 +180,14 @@ The local admin UI provides full management capabilities for standalone deployme
 |-----|-------------|
 | **Domains** | Add/edit/delete allowed domains with aliases, timeouts, rate limits, credentials |
 | **Settings** | DNS servers, cache TTL, default rate limits, operation mode |
-| **Raw YAML** | Direct maltbox.yaml editing for advanced users |
+| **Raw YAML** | Direct cagent.yaml editing for advanced users |
 
-## Unified Configuration (maltbox.yaml)
+## Unified Configuration (cagent.yaml)
 
 All configuration is in a single YAML file that generates both CoreDNS and Envoy configs:
 
 ```yaml
-# configs/maltbox.yaml
+# configs/cagent.yaml
 mode: standalone
 
 dns:
@@ -225,7 +225,7 @@ domains:
     read_only: true         # Block POST/PUT/DELETE
 ```
 
-With `--profile managed` or `--profile admin`, agent-manager watches `maltbox.yaml` and regenerates CoreDNS/Envoy configs on changes. Without it, edit configs directly.
+With `--profile managed` or `--profile admin`, agent-manager watches `cagent.yaml` and regenerates CoreDNS/Envoy configs on changes. Without it, edit configs directly.
 
 ## Docker Compose Profiles
 
@@ -333,11 +333,11 @@ AGENT_VARIANT=lean  # or dev, ml
 data-plane/
 ├── docker-compose.yml          # Docker Compose configuration
 ├── configs/
-│   ├── maltbox.yaml            # Main configuration file
+│   ├── cagent.yaml            # Main configuration file
 │   ├── envoy/
-│   │   └── envoy-enhanced.yaml # Envoy proxy (generated from maltbox.yaml)
+│   │   └── envoy-enhanced.yaml # Envoy proxy (generated from cagent.yaml)
 │   ├── coredns/
-│   │   ├── Corefile            # CoreDNS config (generated from maltbox.yaml)
+│   │   ├── Corefile            # CoreDNS config (generated from cagent.yaml)
 │   │   └── allowlist.hosts     # Static fallback allowlist
 │   ├── vector/
 │   │   └── vector.yaml         # Log collection config
@@ -348,6 +348,6 @@ data-plane/
 │   ├── local-admin/            # Local admin UI (React + FastAPI)
 │   │   ├── frontend/           # React app
 │   │   └── backend/            # FastAPI backend
-│   └── config-generator/       # maltbox.yaml → CoreDNS/Envoy configs
+│   └── config-generator/       # cagent.yaml → CoreDNS/Envoy configs
 └── tests/
 ```

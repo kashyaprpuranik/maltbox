@@ -1,5 +1,5 @@
 # =============================================================================
-# Maltbox Data Plane Configuration
+# Cagent Data Plane Configuration
 # =============================================================================
 # Single source of truth for:
 #   - Domain allowlist (generates CoreDNS + Envoy configs)

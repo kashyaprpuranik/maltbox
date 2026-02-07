@@ -13,6 +13,6 @@ datasources:
       timeField: "_timestamp"
       esVersion: "7.10.0"
     basicAuth: true
-    basicAuthUser: admin@maltbox.local
+    basicAuthUser: admin@cagent.local
     secureJsonData:
       basicAuthPassword: admin

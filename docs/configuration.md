@@ -7,16 +7,16 @@ This guide covers configuring allowlists, secrets, rate limits, and per-agent se
 | Mode | Method | Description |
 |------|--------|-------------|
 | **Standalone** | Local Admin UI | http://localhost:8080 - structured form editor |
-| **Standalone** | maltbox.yaml | Edit `configs/maltbox.yaml` directly |
+| **Standalone** | cagent.yaml | Edit `configs/cagent.yaml` directly |
 | **Connected** | Control Plane UI | http://localhost:9080 - full admin console |
 | **Connected** | Control Plane API | REST API endpoints |
 
-## Standalone Mode: maltbox.yaml
+## Standalone Mode: cagent.yaml
 
 In standalone mode, all configuration is in a single YAML file:
 
 ```yaml
-# data-plane/configs/maltbox.yaml
+# data-plane/configs/cagent.yaml
 mode: standalone
 
 dns:

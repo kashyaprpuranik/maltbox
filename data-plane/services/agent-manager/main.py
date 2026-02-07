@@ -5,12 +5,12 @@ Runs as a background service that:
 1. Sends heartbeat to control plane every 30s with agent status
 2. Receives any pending commands (wipe, restart, stop, start)
 3. Executes commands and reports results on next heartbeat
-4. Syncs config from control plane OR generates from maltbox.yaml
+4. Syncs config from control plane OR generates from cagent.yaml
 5. Regenerates CoreDNS and Envoy configs when allowlist changes
 
 Modes:
-- standalone: Uses maltbox.yaml as single source of truth
-- connected: Syncs from control plane, uses maltbox.yaml as fallback
+- standalone: Uses cagent.yaml as single source of truth
+- connected: Syncs from control plane, uses cagent.yaml as fallback
 
 No inbound ports required - only outbound to control plane.
 """
@@ -55,7 +55,7 @@ HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL", "30"))
 AGENT_ID = os.environ.get("AGENT_ID", "default")
 
 # Config paths
-MALTBOX_CONFIG_PATH = os.environ.get("MALTBOX_CONFIG_PATH", "/etc/maltbox/maltbox.yaml")
+CAGENT_CONFIG_PATH = os.environ.get("CAGENT_CONFIG_PATH", "/etc/cagent/cagent.yaml")
 COREDNS_COREFILE_PATH = os.environ.get("COREDNS_COREFILE_PATH", "/etc/coredns/Corefile")
 ENVOY_CONFIG_PATH = os.environ.get("ENVOY_CONFIG_PATH", "/etc/envoy/envoy.yaml")
 
@@ -68,7 +68,7 @@ COREDNS_ALLOWLIST_PATH = os.environ.get("COREDNS_ALLOWLIST_PATH", "/etc/coredns/
 STATIC_ALLOWLIST_PATH = os.environ.get("STATIC_ALLOWLIST_PATH", "/etc/coredns/static-allowlist.hosts")
 
 # Config generator instance
-config_generator = ConfigGenerator(MALTBOX_CONFIG_PATH)
+config_generator = ConfigGenerator(CAGENT_CONFIG_PATH)
 
 # Docker client
 docker_client = docker.from_env()
@@ -266,7 +266,7 @@ def reload_envoy():
 
 
 def regenerate_configs(additional_domains: list = None) -> bool:
-    """Regenerate CoreDNS and Envoy configs from maltbox.yaml.
+    """Regenerate CoreDNS and Envoy configs from cagent.yaml.
 
     Args:
         additional_domains: Extra domains to merge (e.g., from control plane sync)
@@ -275,7 +275,7 @@ def regenerate_configs(additional_domains: list = None) -> bool:
         True if configs were regenerated, False otherwise.
     """
     try:
-        # Load config from maltbox.yaml
+        # Load config from cagent.yaml
         if not config_generator.load_config():
             # Config hasn't changed and no additional domains
             if not additional_domains:
@@ -283,7 +283,7 @@ def regenerate_configs(additional_domains: list = None) -> bool:
                 return False
 
         # TODO: If additional_domains provided, merge them into config
-        # For now, just regenerate from maltbox.yaml
+        # For now, just regenerate from cagent.yaml
 
         # Generate CoreDNS Corefile
         config_generator.write_corefile(COREDNS_COREFILE_PATH)
@@ -295,7 +295,7 @@ def regenerate_configs(additional_domains: list = None) -> bool:
         restart_coredns()
         reload_envoy()
 
-        logger.info("Regenerated configs from maltbox.yaml")
+        logger.info("Regenerated configs from cagent.yaml")
         return True
 
     except Exception as e:
@@ -306,18 +306,18 @@ def regenerate_configs(additional_domains: list = None) -> bool:
 def sync_config() -> bool:
     """Sync configuration and regenerate CoreDNS + Envoy configs.
 
-    In standalone mode: regenerates from maltbox.yaml only
-    In connected mode: fetches allowlist from CP, merges with maltbox.yaml
+    In standalone mode: regenerates from cagent.yaml only
+    In connected mode: fetches allowlist from CP, merges with cagent.yaml
 
     Returns True if configs were updated, False otherwise.
     """
     if DATAPLANE_MODE == "standalone":
-        # Standalone mode: just use maltbox.yaml
+        # Standalone mode: just use cagent.yaml
         return regenerate_configs()
 
     # Connected mode: fetch from control plane and merge
     if not CONTROL_PLANE_URL or not CONTROL_PLANE_TOKEN:
-        logger.warning("Control plane not configured, falling back to maltbox.yaml")
+        logger.warning("Control plane not configured, falling back to cagent.yaml")
         return regenerate_configs()
 
     try:
@@ -330,7 +330,7 @@ def sync_config() -> bool:
         )
 
         if response.status_code != 200:
-            logger.warning(f"Failed to fetch allowlist: {response.status_code}, using maltbox.yaml")
+            logger.warning(f"Failed to fetch allowlist: {response.status_code}, using cagent.yaml")
             return regenerate_configs()
 
         # Parse CP domains
@@ -342,15 +342,15 @@ def sync_config() -> bool:
 
         logger.info(f"Fetched {len(cp_domains)} domains from control plane")
 
-        # TODO: In future, merge CP domains with maltbox.yaml domains
-        # For now, CP domains would override maltbox.yaml in connected mode
+        # TODO: In future, merge CP domains with cagent.yaml domains
+        # For now, CP domains would override cagent.yaml in connected mode
         # This requires extending ConfigGenerator to accept additional domains
 
-        # Regenerate configs (maltbox.yaml is still the primary source)
+        # Regenerate configs (cagent.yaml is still the primary source)
         return regenerate_configs(additional_domains=cp_domains)
 
     except requests.exceptions.RequestException as e:
-        logger.warning(f"Could not reach control plane: {e}, using maltbox.yaml")
+        logger.warning(f"Could not reach control plane: {e}, using cagent.yaml")
         return regenerate_configs()
     except Exception as e:
         logger.error(f"Error syncing config: {e}")
@@ -418,7 +418,7 @@ def main_loop():
     logger.info("Agent manager starting")
     logger.info(f"  Mode: {DATAPLANE_MODE}")
     logger.info(f"  Agent ID: {AGENT_ID}")
-    logger.info(f"  Config file: {MALTBOX_CONFIG_PATH}")
+    logger.info(f"  Config file: {CAGENT_CONFIG_PATH}")
     logger.info(f"  CoreDNS config: {COREDNS_COREFILE_PATH}")
     logger.info(f"  Envoy config: {ENVOY_CONFIG_PATH}")
     logger.info(f"  Agent container: {AGENT_CONTAINER_NAME}")
@@ -435,8 +435,8 @@ def main_loop():
     # Track time since last config sync
     heartbeat_count = 0
 
-    # Initial config generation from maltbox.yaml
-    logger.info("Generating initial configs from maltbox.yaml...")
+    # Initial config generation from cagent.yaml
+    logger.info("Generating initial configs from cagent.yaml...")
     config_generator.load_config()
     regenerate_configs()
 

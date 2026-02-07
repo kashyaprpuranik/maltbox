@@ -1,4 +1,4 @@
-# Maltbox - Control Plane
+# Cagent - Control Plane
 
 The control plane provides centralized management, policy enforcement, secrets storage, and observability for the AI Devbox platform.
 
@@ -108,7 +108,7 @@ docker-compose up -d
 # Access services:
 # - Admin UI:     http://localhost:9080
 # - API Docs:     http://localhost:8002/docs
-# - OpenObserve:  http://localhost:5080 (admin@maltbox.local/admin)
+# - OpenObserve:  http://localhost:5080 (admin@cagent.local/admin)
 ```
 
 ## API Documentation

@@ -244,9 +244,9 @@ docker-compose up -d
 └── data-plane/
     ├── docker-compose.yml          # Data plane services
     ├── configs/
-    │   ├── maltbox.yaml        # Unified config (generates CoreDNS + Envoy)
-    │   ├── coredns/            # DNS config (generated from maltbox.yaml)
-    │   ├── envoy/              # Proxy config (generated from maltbox.yaml)
+    │   ├── cagent.yaml        # Unified config (generates CoreDNS + Envoy)
+    │   ├── coredns/            # DNS config (generated from cagent.yaml)
+    │   ├── envoy/              # Proxy config (generated from cagent.yaml)
     │   ├── vector/             # Log collection & forwarding
     │   └── frpc/               # FRP client config (STCP tunnels)
     ├── services/
@@ -254,6 +254,6 @@ docker-compose up -d
     │   ├── local-admin/        # Local admin UI (standalone mode)
     │   │   ├── frontend/       # React app with web terminal
     │   │   └── backend/        # FastAPI backend
-    │   └── config-generator/   # maltbox.yaml → CoreDNS/Envoy configs
+    │   └── config-generator/   # cagent.yaml → CoreDNS/Envoy configs
     └── tests/                  # Unit and E2E tests
 ```

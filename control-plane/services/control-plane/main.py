@@ -1204,7 +1204,7 @@ async def get_current_user(token_info: TokenInfo = Depends(verify_token)):
 # =============================================================================
 
 OPENOBSERVE_URL = os.environ.get('OPENOBSERVE_URL', 'http://openobserve:5080')
-OPENOBSERVE_USER = os.environ.get('OPENOBSERVE_USER', 'admin@maltbox.local')
+OPENOBSERVE_USER = os.environ.get('OPENOBSERVE_USER', 'admin@cagent.local')
 OPENOBSERVE_PASSWORD = os.environ.get('OPENOBSERVE_PASSWORD', 'admin')
 
 

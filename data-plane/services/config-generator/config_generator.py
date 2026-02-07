@@ -1,7 +1,7 @@
 """
-Config Generator - Generates CoreDNS and Envoy configs from maltbox.yaml
+Config Generator - Generates CoreDNS and Envoy configs from cagent.yaml
 
-Single source of truth: configs/maltbox.yaml
+Single source of truth: configs/cagent.yaml
 Outputs:
   - configs/coredns/Corefile.generated
   - configs/envoy/envoy.generated.yaml
@@ -21,13 +21,13 @@ logger = logging.getLogger(__name__)
 
 
 class ConfigGenerator:
-    def __init__(self, config_path: str = "/etc/maltbox/maltbox.yaml"):
+    def __init__(self, config_path: str = "/etc/cagent/cagent.yaml"):
         self.config_path = Path(config_path)
         self.config = {}
         self.last_hash = None
 
     def load_config(self) -> bool:
-        """Load maltbox.yaml config. Returns True if config changed."""
+        """Load cagent.yaml config. Returns True if config changed."""
         if not self.config_path.exists():
             logger.error(f"Config file not found: {self.config_path}")
             return False
@@ -77,7 +77,7 @@ class ConfigGenerator:
 
         lines = [
             "# =============================================================================",
-            "# CoreDNS Configuration - Auto-generated from maltbox.yaml",
+            "# CoreDNS Configuration - Auto-generated from cagent.yaml",
             f"# Generated: {datetime.utcnow().isoformat()}Z",
             "# DO NOT EDIT - changes will be overwritten",
             "# =============================================================================",
@@ -161,7 +161,7 @@ class ConfigGenerator:
     # =========================================================================
 
     def generate_envoy_config(self) -> dict:
-        """Generate Envoy config from maltbox.yaml."""
+        """Generate Envoy config from cagent.yaml."""
         domains = self.get_domains()
         default_rate_limit = self.get_default_rate_limit()
 
@@ -472,7 +472,7 @@ class ConfigGenerator:
         # Generate Lua code
         return f'''
 -- =======================================================================
--- Auto-generated Lua filter from maltbox.yaml
+-- Auto-generated Lua filter from cagent.yaml
 -- Generated: {datetime.utcnow().isoformat()}Z
 -- =======================================================================
 
@@ -489,10 +489,10 @@ local token_buckets = {{}}
 local cp_available = true
 local cp_last_failure = 0
 
--- Static credentials from maltbox.yaml
+-- Static credentials from cagent.yaml
 local static_credentials = {self._lua_table(credentials)}
 
--- Static rate limits from maltbox.yaml
+-- Static rate limits from cagent.yaml
 local static_rate_limits = {self._lua_table(rate_limits)}
 
 -- Alias map: devbox.local -> real domain
@@ -677,7 +677,7 @@ end
 
             # Add header
             header = f"""# =============================================================================
-# Envoy Configuration - Auto-generated from maltbox.yaml
+# Envoy Configuration - Auto-generated from cagent.yaml
 # Generated: {datetime.utcnow().isoformat()}Z
 # DO NOT EDIT - changes will be overwritten
 # =============================================================================
@@ -702,8 +702,8 @@ def main():
     """CLI entrypoint."""
     import argparse
 
-    parser = argparse.ArgumentParser(description='Generate configs from maltbox.yaml')
-    parser.add_argument('--config', default='/etc/maltbox/maltbox.yaml', help='Path to maltbox.yaml')
+    parser = argparse.ArgumentParser(description='Generate configs from cagent.yaml')
+    parser.add_argument('--config', default='/etc/cagent/cagent.yaml', help='Path to cagent.yaml')
     parser.add_argument('--coredns', default='/etc/coredns/Corefile', help='Output path for Corefile')
     parser.add_argument('--envoy', default='/etc/envoy/envoy.yaml', help='Output path for Envoy config')
     parser.add_argument('--watch', action='store_true', help='Watch for config changes')

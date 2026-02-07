@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# Network Hardening Script for Maltbox Data Plane
+# Network Hardening Script for Cagent Data Plane
 # =============================================================================
 #
 # This script adds iptables rules as defense-in-depth backup to Docker's
@@ -44,10 +44,10 @@ if ! command -v iptables &> /dev/null; then
 fi
 
 # =============================================================================
-# Create custom chain for Maltbox rules
+# Create custom chain for Cagent rules
 # =============================================================================
 
-CHAIN_NAME="MALTBOX-AGENT"
+CHAIN_NAME="CAGENT-AGENT"
 
 # Remove existing chain if present (for idempotency)
 iptables -D FORWARD -s "$AGENT_IP" -j "$CHAIN_NAME" 2>/dev/null || true
@@ -121,7 +121,7 @@ log_info "To remove these rules, run: $0 --remove"
 # =============================================================================
 
 if [[ "$1" == "--remove" ]]; then
-    log_warn "Removing Maltbox iptables rules..."
+    log_warn "Removing Cagent iptables rules..."
     iptables -D FORWARD -s "$AGENT_IP" -j "$CHAIN_NAME" 2>/dev/null || true
     iptables -F "$CHAIN_NAME" 2>/dev/null || true
     iptables -X "$CHAIN_NAME" 2>/dev/null || true

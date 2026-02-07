@@ -193,7 +193,7 @@ sinks:
       codec: json
     auth:
       strategy: basic
-      user: "${OPENOBSERVE_USER:-admin@maltbox.local}"
+      user: "${OPENOBSERVE_USER:-admin@cagent.local}"
       password: "${OPENOBSERVE_PASSWORD:-admin}"
     batch:
       max_bytes: 10485760

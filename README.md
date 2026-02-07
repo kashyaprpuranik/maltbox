@@ -1,4 +1,4 @@
-# Maltbox
+# Cagent
 
 Secure development environment for AI agents with isolated networking and centralized control.
 
@@ -15,7 +15,7 @@ The core tension: agents need enough access to work, but not so much that a misa
 
 ## Threat Model
 
-Maltbox assumes the AI agent is **untrusted by default**. The agent may be:
+Cagent assumes the AI agent is **untrusted by default**. The agent may be:
 
 | Threat | Description |
 |--------|-------------|
@@ -26,7 +26,7 @@ Maltbox assumes the AI agent is **untrusted by default**. The agent may be:
 
 ### Trust Boundaries
 
-Maltbox has layered trust boundaries with different levels of protection:
+Cagent has layered trust boundaries with different levels of protection:
 
 | Boundary | Trusted | Defended Against | Current Controls |
 |----------|---------|------------------|------------------|
@@ -171,7 +171,7 @@ docker-compose --profile dev up -d
 
 #### Locally Managed (With Admin UI)
 
-Adds agent-manager (watches `maltbox.yaml`) and local admin UI for browser-based management and observability.
+Adds agent-manager (watches `cagent.yaml`) and local admin UI for browser-based management and observability.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -183,7 +183,7 @@ Adds agent-manager (watches `maltbox.yaml`) and local admin UI for browser-based
 │  └─────────────────────────────────────────────────────────────┘│
 │                              │                                   │
 │  ┌──────────────┐    ┌──────┴──────┐                            │
-│  │Agent Manager │◄───│ maltbox.yaml│──── generates ───┐         │
+│  │Agent Manager │◄───│ cagent.yaml│──── generates ───┐         │
 │  └──────────────┘    └─────────────┘                  │         │
 │                                                       ▼         │
 │  ┌─────────────────────────────────────────────────────────────┐│
@@ -286,7 +286,7 @@ docker-compose up -d
 # Access points:
 # - Admin UI:     http://localhost:9080
 # - API docs:     http://localhost:8002/docs
-# - OpenObserve:  http://localhost:5080 (admin@maltbox.local/admin)
+# - OpenObserve:  http://localhost:5080 (admin@cagent.local/admin)
 ```
 
 **2. Start Data Plane**

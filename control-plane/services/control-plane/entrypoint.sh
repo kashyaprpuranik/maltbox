@@ -115,6 +115,26 @@ with engine.connect() as conn:
         conn.execute(text('CREATE INDEX ix_egress_limits_agent_id ON egress_limits(agent_id)'))
         conn.commit()
 
+    # Create allowed_paths table if missing
+    result = conn.execute(text(\"\"\"
+        SELECT table_name FROM information_schema.tables
+        WHERE table_name = 'allowed_paths'
+    \"\"\"))
+    if not result.fetchone():
+        print('Creating allowed_paths table...')
+        conn.execute(text('''
+            CREATE TABLE allowed_paths (
+                id SERIAL PRIMARY KEY,
+                allowlist_entry_id INTEGER NOT NULL REFERENCES allowlist(id) ON DELETE CASCADE,
+                pattern VARCHAR(500) NOT NULL,
+                description VARCHAR(500),
+                enabled BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        '''))
+        conn.execute(text('CREATE INDEX ix_allowed_paths_allowlist_entry_id ON allowed_paths(allowlist_entry_id)'))
+        conn.commit()
+
     # Fix seed tokens - ensure correct is_super_admin and tenant_id
     # Get default tenant id first
     result = conn.execute(text(\"\"\"

@@ -65,6 +65,52 @@ curl -X POST http://localhost:8002/api/v1/allowlist \
 The agent-manager syncs the allowlist from the control plane to CoreDNS every 5 minutes.
 A static fallback allowlist is available at `data-plane/configs/coredns/allowlist.hosts` for when the control plane is unreachable.
 
+## Path Filtering
+
+By default, all paths are allowed for a domain. You can restrict access to specific paths by adding path patterns when creating or updating an allowlist entry.
+
+**Behavior:**
+- No paths defined → all paths allowed (backwards compatible)
+- Paths defined → only matching paths allowed (allowlist)
+
+**Pattern syntax:**
+- `/v1/chat/completions` - exact match
+- `/v1/chat/*` - prefix match (matches `/v1/chat/completions`, `/v1/chat/stream`)
+- `/api/v2*` - prefix match without slash (matches `/api/v2/users`, `/api/v2`)
+
+```bash
+# Add domain with path restrictions
+curl -X POST http://localhost:8002/api/v1/allowlist \
+  -H "Authorization: Bearer admin-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "entry_type": "domain",
+    "value": "api.openai.com",
+    "description": "OpenAI API - chat only",
+    "paths": [
+      {"pattern": "/v1/chat/*", "description": "Chat completions"},
+      {"pattern": "/v1/models", "description": "List models"},
+      {"pattern": "/v1/embeddings", "description": "Embeddings"}
+    ]
+  }'
+# Blocks: /v1/files (upload), /v1/fine-tuning, etc.
+
+# Add path to existing domain
+curl -X POST http://localhost:8002/api/v1/allowlist/1/paths \
+  -H "Authorization: Bearer admin-token" \
+  -H "Content-Type: application/json" \
+  -d '{"pattern": "/v1/audio/transcriptions", "description": "Whisper API"}'
+
+# Remove path from domain
+curl -X DELETE http://localhost:8002/api/v1/allowlist/1/paths/5 \
+  -H "Authorization: Bearer admin-token"
+```
+
+**Use cases:**
+- Block file upload endpoints (exfiltration risk)
+- Restrict to read-only API operations
+- Allow specific API versions only
+
 ## Adding Secrets (Domain-Scoped)
 
 Secrets are scoped to specific domains. Envoy's Lua filter automatically injects the correct credential based on the request destination.

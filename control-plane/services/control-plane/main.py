@@ -24,7 +24,7 @@ from starlette.websockets import WebSocketState
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Boolean, ForeignKey, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session, relationship
+from sqlalchemy.orm import sessionmaker, Session, relationship, joinedload
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -105,6 +105,23 @@ class AllowlistEntry(Base):
     enabled = Column(Boolean, default=True)
     # Per-agent scoping: NULL = global (applies to all agents)
     agent_id = Column(String(100), nullable=True, index=True)
+
+    # Relationship to allowed paths
+    allowed_paths = relationship("AllowedPath", back_populates="allowlist_entry", cascade="all, delete-orphan")
+
+
+class AllowedPath(Base):
+    """Path patterns allowed for a domain. If no paths defined, all paths allowed."""
+    __tablename__ = "allowed_paths"
+
+    id = Column(Integer, primary_key=True, index=True)
+    allowlist_entry_id = Column(Integer, ForeignKey("allowlist.id", ondelete="CASCADE"), nullable=False, index=True)
+    pattern = Column(String(500), nullable=False)  # e.g., "/v1/chat/*", "/api/v2/users"
+    description = Column(String(500))
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    allowlist_entry = relationship("AllowlistEntry", back_populates="allowed_paths")
 
 
 class Secret(Base):
@@ -253,11 +270,27 @@ class AuditLogResponse(BaseModel):
         from_attributes = True
 
 
+class AllowedPathCreate(BaseModel):
+    pattern: str  # e.g., "/v1/chat/*", "/api/v2/users"
+    description: Optional[str] = None
+
+
+class AllowedPathResponse(BaseModel):
+    id: int
+    pattern: str
+    description: Optional[str]
+    enabled: bool
+
+    class Config:
+        from_attributes = True
+
+
 class AllowlistEntryCreate(BaseModel):
     entry_type: str
     value: str
     description: Optional[str] = None
     agent_id: Optional[str] = None  # NULL = global (applies to all agents)
+    paths: Optional[List[AllowedPathCreate]] = None  # If specified, only these paths allowed
 
 
 class AllowlistEntryResponse(BaseModel):
@@ -268,6 +301,7 @@ class AllowlistEntryResponse(BaseModel):
     enabled: bool
     created_at: datetime
     agent_id: Optional[str] = None  # NULL = global
+    paths: List[AllowedPathResponse] = []  # Empty = all paths allowed
 
     class Config:
         from_attributes = True
@@ -1215,7 +1249,7 @@ async def get_allowlist(
     Filter by agent_id to see entries for a specific agent.
     Super admins see all entries. Tenant admins see only their tenant's entries.
     """
-    query = db.query(AllowlistEntry)
+    query = db.query(AllowlistEntry).options(joinedload(AllowlistEntry.allowed_paths))
 
     # Filter by tenant for non-super-admin
     if not token_info.is_super_admin and token_info.tenant_id:
@@ -1262,6 +1296,18 @@ async def add_allowlist_entry(
     db.add(db_entry)
     db.commit()
     db.refresh(db_entry)
+
+    # Add allowed paths if specified
+    if entry.paths:
+        for path in entry.paths:
+            db_path = AllowedPath(
+                allowlist_entry_id=db_entry.id,
+                pattern=path.pattern,
+                description=path.description
+            )
+            db.add(db_path)
+        db.commit()
+        db.refresh(db_entry)
 
     # Allowlist changes are picked up by agent-manager via polling
     # (GET /api/v1/allowlist/export)
@@ -1366,6 +1412,121 @@ async def export_allowlist(
             "commands": values,
             "generated_at": datetime.utcnow().isoformat()
         }
+
+
+def match_path_pattern(pattern: str, path: str) -> bool:
+    """Match a path against a pattern. Supports * wildcard at end."""
+    if pattern.endswith("/*"):
+        # Prefix match: /v1/chat/* matches /v1/chat/completions
+        prefix = pattern[:-1]  # Remove *
+        return path.startswith(prefix)
+    elif pattern.endswith("*"):
+        # Prefix match without slash: /v1* matches /v1/anything
+        prefix = pattern[:-1]
+        return path.startswith(prefix)
+    else:
+        # Exact match
+        return path == pattern
+
+
+@app.get("/api/v1/allowlist/check-path")
+@limiter.limit("120/minute")  # Envoy calls this frequently
+async def check_path_allowed(
+    request: Request,
+    domain: str,
+    path: str,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(verify_token)
+):
+    """Check if a path is allowed for a domain (used by Envoy Lua filter).
+
+    Returns whether the path is allowed based on:
+    - If domain has no path restrictions: allowed
+    - If domain has path restrictions: check if path matches any pattern
+    """
+    # Find the domain in allowlist
+    query = db.query(AllowlistEntry).options(
+        joinedload(AllowlistEntry.allowed_paths)
+    ).filter(
+        AllowlistEntry.entry_type == "domain",
+        AllowlistEntry.enabled == True
+    )
+
+    # Agent tokens only see their agent's entries + global entries
+    if token_info.token_type == "agent" and token_info.agent_id:
+        query = query.filter(
+            (AllowlistEntry.agent_id == token_info.agent_id) | (AllowlistEntry.agent_id.is_(None))
+        )
+
+    entries = query.all()
+
+    # Find matching domain entry (agent-specific takes precedence)
+    matching_entry = None
+    for entry in entries:
+        if entry.value == domain or (entry.value.startswith("*.") and domain.endswith(entry.value[1:])):
+            if matching_entry is None or (entry.agent_id is not None and matching_entry.agent_id is None):
+                matching_entry = entry
+
+    if not matching_entry:
+        return {"allowed": False, "reason": "domain_not_in_allowlist"}
+
+    # If no paths defined, all paths are allowed
+    enabled_paths = [p for p in matching_entry.allowed_paths if p.enabled]
+    if not enabled_paths:
+        return {"allowed": True, "reason": "no_path_restrictions"}
+
+    # Check if path matches any allowed pattern
+    for allowed_path in enabled_paths:
+        if match_path_pattern(allowed_path.pattern, path):
+            return {"allowed": True, "matched_pattern": allowed_path.pattern}
+
+    return {"allowed": False, "reason": "path_not_in_allowlist"}
+
+
+@app.post("/api/v1/allowlist/{entry_id}/paths", response_model=AllowedPathResponse)
+@limiter.limit("30/minute")
+async def add_allowed_path(
+    request: Request,
+    entry_id: int,
+    path: AllowedPathCreate,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
+):
+    """Add an allowed path to an allowlist entry."""
+    entry = db.query(AllowlistEntry).filter(AllowlistEntry.id == entry_id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Allowlist entry not found")
+
+    db_path = AllowedPath(
+        allowlist_entry_id=entry_id,
+        pattern=path.pattern,
+        description=path.description
+    )
+    db.add(db_path)
+    db.commit()
+    db.refresh(db_path)
+    return db_path
+
+
+@app.delete("/api/v1/allowlist/{entry_id}/paths/{path_id}")
+async def delete_allowed_path(
+    request: Request,
+    entry_id: int,
+    path_id: int,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
+):
+    """Delete an allowed path from an allowlist entry."""
+    path = db.query(AllowedPath).filter(
+        AllowedPath.id == path_id,
+        AllowedPath.allowlist_entry_id == entry_id
+    ).first()
+    if not path:
+        raise HTTPException(status_code=404, detail="Path not found")
+
+    db.delete(path)
+    db.commit()
+    return {"status": "deleted"}
 
 
 # =============================================================================

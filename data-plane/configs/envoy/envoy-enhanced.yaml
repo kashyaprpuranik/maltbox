@@ -809,6 +809,68 @@ static_resources:
                           end
                         end
 
+                        -- Path allowlist cache: domain:path -> {allowed, expires_at}
+                        local path_allowed_cache = {}
+
+                        -- Check if path is allowed for domain (with caching)
+                        function check_path_allowed(request_handle, domain, path)
+                          local host_clean = string.match(domain, "^([^:]+)") or domain
+                          local cache_key = host_clean .. ":" .. path
+
+                          -- Check cache first
+                          local cached = path_allowed_cache[cache_key]
+                          if cached and cached.expires_at > os.time() then
+                            return cached.allowed, cached.reason
+                          end
+
+                          -- In standalone mode, no path filtering (allow all)
+                          if not should_contact_cp() then
+                            return true, "standalone_mode"
+                          end
+
+                          -- Query control plane
+                          local headers, body = request_handle:httpCall(
+                            "control_plane_api",
+                            {
+                              [":method"] = "GET",
+                              [":path"] = "/api/v1/allowlist/check-path?domain=" .. url_encode(host_clean) .. "&path=" .. url_encode(path),
+                              [":authority"] = "control-plane-api",
+                              ["authorization"] = "Bearer " .. API_TOKEN
+                            },
+                            "",
+                            5000,
+                            false
+                          )
+
+                          local allowed = true
+                          local reason = "no_response"
+
+                          if body and string.len(body) > 0 then
+                            mark_cp_success()
+                            -- Parse response: {"allowed": true/false, "reason": "..."}
+                            local allowed_str = string.match(body, '"allowed"%s*:%s*(%w+)')
+                            reason = string.match(body, '"reason"%s*:%s*"([^"]*)"') or "unknown"
+
+                            if allowed_str == "false" then
+                              allowed = false
+                            end
+                          else
+                            mark_cp_failure()
+                            -- On CP failure, allow (fail open for availability)
+                            allowed = true
+                            reason = "cp_unavailable"
+                          end
+
+                          -- Cache the result
+                          path_allowed_cache[cache_key] = {
+                            allowed = allowed,
+                            reason = reason,
+                            expires_at = os.time() + CACHE_TTL_SECONDS
+                          }
+
+                          return allowed, reason
+                        end
+
                         -- Store domain for response handler
                         local request_domain = nil
 
@@ -847,6 +909,23 @@ static_resources:
                             request_handle:respond(
                               {[":status"] = "429", ["retry-after"] = "60"},
                               '{"error": "rate_limit_exceeded", "message": "Too many requests to this domain"}'
+                            )
+                            return
+                          end
+
+                          -- Path allowlist check (only in connected mode with path restrictions)
+                          local request_path = request_handle:headers():get(":path") or "/"
+                          -- Strip query string for path matching
+                          local path_only = string.match(request_path, "^([^?]+)") or request_path
+                          local path_allowed, path_reason = check_path_allowed(request_handle, real_domain, path_only)
+                          if not path_allowed then
+                            request_handle:logWarn(string.format(
+                              "Path not allowed: %s%s (reason: %s)",
+                              real_domain, path_only, path_reason
+                            ))
+                            request_handle:respond(
+                              {[":status"] = "403"},
+                              '{"error": "path_not_allowed", "message": "This path is not in the allowlist for this domain"}'
                             )
                             return
                           end

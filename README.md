@@ -49,19 +49,9 @@ Maltbox has layered trust boundaries with different levels of protection:
 - Physical access to control plane servers
 - Insider threats from infrastructure operators
 
-### Production Hardening (Recommended)
+### Production Hardening
 
-For production deployments handling sensitive workloads, consider:
-
-| Enhancement | Purpose | Implementation |
-|-------------|---------|----------------|
-| **API Gateway + WAF** | Rate limiting, bot protection, OWASP rules | Kong, AWS API Gateway, Cloudflare |
-| **Mandatory MFA** | Protect admin accounts from credential theft | OIDC provider (Okta, Auth0, Keycloak) |
-| **Audit logging** | Detect suspicious admin activity | Ship to SIEM, alert on anomalies |
-| **Secret rotation** | Limit blast radius of compromised credentials | Vault integration, short-lived tokens |
-| **mTLS** | Authenticate data plane ↔ control plane | step-ca, SPIFFE/SPIRE |
-| **Network segmentation** | Isolate control plane from public internet | VPC, private endpoints, bastion |
-| **Immutable infrastructure** | Prevent persistent compromise | Read-only containers, signed images |
+For production deployments, consider adding: API gateway with WAF (rate limiting, OWASP rules), mandatory MFA via OIDC, SIEM integration for audit logs, mTLS between data plane and control plane, and network segmentation to isolate the control plane from public internet.
 
 ## Security Principles
 

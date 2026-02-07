@@ -119,7 +119,7 @@ Features:
 ```bash
 export CONTROL_PLANE_URL=http://<control-plane-ip>:8002
 export CONTROL_PLANE_TOKEN=your-token
-docker-compose --profile standard --profile managed up -d
+docker-compose --profile standard --profile managed up -d  # or --profile dev if no gVisor
 ```
 
 ### Standalone Mode
@@ -129,7 +129,11 @@ docker-compose --profile standard --profile managed up -d
 Lightweight 3-container setup. Edit `coredns/Corefile` and `envoy/envoy.yaml` directly.
 
 ```bash
+# With gVisor (recommended)
 docker-compose --profile standard up -d
+
+# Without gVisor (development)
+docker-compose --profile dev up -d
 ```
 
 #### Managed (With Admin UI)
@@ -137,7 +141,11 @@ docker-compose --profile standard up -d
 Adds agent-manager (watches `maltbox.yaml`) and local admin UI.
 
 ```bash
+# With gVisor (recommended)
 docker-compose --profile standard --profile admin up -d
+
+# Without gVisor (development)
+docker-compose --profile dev --profile admin up -d
 
 # Access at http://localhost:8080
 ```
@@ -221,27 +229,27 @@ With `--profile managed` or `--profile admin`, agent-manager watches `maltbox.ya
 
 ## Docker Compose Profiles
 
-| Profile | Services Added |
-|---------|----------------|
-| `standard` | agent (runc runtime) |
-| `secure` | agent (gVisor runtime) |
-| `managed` | agent-manager |
-| `admin` | agent-manager + local-admin UI |
-| `auditing` | vector (log shipping) |
-| `ssh` | frpc (STCP tunnel) |
+| Profile | Services Added | Description |
+|---------|----------------|-------------|
+| `standard` | agent (gVisor) | **Recommended** - kernel-level syscall isolation |
+| `dev` | agent (runc) | For development or when gVisor unavailable |
+| `managed` | agent-manager | Config file watching |
+| `admin` | agent-manager + local-admin UI | Web-based management |
+| `auditing` | vector (log shipping) | Forward logs to OpenObserve |
+| `ssh` | frpc (STCP tunnel) | Remote SSH access |
 
 ```bash
-# Minimal static config (agent + envoy + coredns only)
+# Standard mode with gVisor (RECOMMENDED - requires gVisor installed)
 docker compose --profile standard up -d
 
-# With agent-manager (watches maltbox.yaml)
-docker compose --profile standard --profile managed up -d
+# Development mode without gVisor
+docker compose --profile dev up -d
 
-# With local admin UI (includes agent-manager)
+# With local admin UI
 docker compose --profile standard --profile admin up -d
 
-# With gVisor isolation (requires gVisor installed)
-docker compose --profile secure --profile admin up -d
+# Development with admin UI
+docker compose --profile dev --profile admin up -d
 
 # With audit logging
 docker compose --profile standard --profile admin --profile auditing up -d
@@ -295,13 +303,15 @@ AGENT_VARIANT=lean  # or dev, ml
 
 ## Security Controls
 
-- **Network Isolation**: Agent on internal-only network, cannot reach internet directly
+- **Network Isolation**: Agent on internal-only network (`internal: true`), no default gateway
+- **iptables Fallback**: Optional script adds explicit DROP rules (run `sudo ./scripts/network-hardening.sh`)
+- **Seccomp Profile**: Blocks raw socket creation to prevent packet-crafting bypass
 - **IPv6 Disabled**: Prevents bypass of IPv4 egress controls
 - **DNS Filtering**: Only allowlisted domains resolve
 - **No Credential Exposure**: Agent never sees API keys
 - **Rate Limiting**: Prevents runaway API usage
+- **Egress Limits**: Per-domain byte budgets to prevent data exfiltration
 - **Audit Trail**: All egress requests logged
-- **Read-only Filesystem**: Agent container has read-only root
 - **Resource Limits**: CPU, memory, and PID limits on agent
 - **gVisor Isolation** (optional): Kernel-level syscall isolation
 

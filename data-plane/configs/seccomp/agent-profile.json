@@ -1,0 +1,69 @@
+{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "syscalls": [
+    {
+      "names": [
+        "socket"
+      ],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 2,
+          "op": "SCMP_CMP_EQ"
+        }
+      ],
+      "comment": "Allow AF_INET (IPv4) sockets"
+    },
+    {
+      "names": [
+        "socket"
+      ],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 10,
+          "op": "SCMP_CMP_EQ"
+        }
+      ],
+      "comment": "Allow AF_INET6 (IPv6) sockets - disabled at network level"
+    },
+    {
+      "names": [
+        "socket"
+      ],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 1,
+          "op": "SCMP_CMP_EQ"
+        }
+      ],
+      "comment": "Allow AF_UNIX (local) sockets"
+    },
+    {
+      "names": [
+        "socket"
+      ],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 16,
+          "op": "SCMP_CMP_EQ"
+        }
+      ],
+      "comment": "Allow AF_NETLINK sockets (for ip command)"
+    },
+    {
+      "names": [
+        "socket"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Block all other socket types (AF_PACKET raw sockets, etc.)"
+    }
+  ]
+}

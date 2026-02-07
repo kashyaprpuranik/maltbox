@@ -292,6 +292,7 @@ static_resources:
                         -- Caches
                         local credential_cache = {}  -- domain -> {header_name, header_value, expires_at}
                         local rate_limit_cache = {}  -- domain -> {rpm, burst, expires_at}
+                        local egress_limit_cache = {}  -- domain -> {bytes_per_hour, expires_at}
                         local token_buckets = {}     -- domain -> {tokens, last_refill}
 
                         -- Egress volume tracking (in-memory, resets on restart)
@@ -491,6 +492,22 @@ static_resources:
                           return nil
                         end
 
+                        function parse_egress_limit_response(body)
+                          if not body or body == "" then
+                            return nil
+                          end
+
+                          local bytes = string.match(body, '"bytes_per_hour"%s*:%s*(%d+)')
+
+                          if bytes then
+                            return {
+                              bytes_per_hour = tonumber(bytes)
+                            }
+                          end
+
+                          return nil
+                        end
+
                         -- Get credential for domain (with caching, static fallback)
                         function get_credential(request_handle, domain)
                           load_static_config(request_handle)
@@ -671,27 +688,76 @@ static_resources:
                           return false
                         end
 
-                        -- Get egress limit for domain
+                        -- Get egress limit for domain (with caching, static fallback)
                         function get_egress_limit(request_handle, domain)
                           load_static_config(request_handle)
                           local host_clean = string.match(domain, "^([^:]+)") or domain
 
-                          -- Check domain-specific limit
-                          local limit = static_egress_limits[host_clean]
-                          if limit then return limit end
+                          -- Check cache first
+                          local cached = egress_limit_cache[host_clean]
+                          if cached and cached.expires_at > os.time() then
+                            return cached.bytes_per_hour
+                          end
 
-                          -- Check wildcard
-                          for pattern, bytes in pairs(static_egress_limits) do
-                            if string.sub(pattern, 1, 2) == "*." then
-                              local suffix = string.sub(pattern, 2)
-                              if string.sub(host_clean, -string.len(suffix)) == suffix then
-                                return bytes
+                          local limit = nil
+
+                          -- Try control plane first (if available)
+                          if should_contact_cp() then
+                            local headers, body = request_handle:httpCall(
+                              "control_plane_api",
+                              {
+                                [":method"] = "GET",
+                                [":path"] = "/api/v1/egress-limits/for-domain?domain=" .. url_encode(host_clean),
+                                [":authority"] = "control-plane-api",
+                                ["authorization"] = "Bearer " .. API_TOKEN
+                              },
+                              "",
+                              5000,
+                              false
+                            )
+
+                            if body and string.len(body) > 0 then
+                              mark_cp_success()
+                              local config = parse_egress_limit_response(body)
+                              if config then
+                                limit = config.bytes_per_hour
                               end
+                            else
+                              mark_cp_failure()
                             end
                           end
 
-                          -- Return default or global default
-                          return static_egress_limits["default"] or DEFAULT_EGRESS_LIMIT
+                          -- Fall back to static config
+                          if not limit then
+                            -- Check domain-specific limit
+                            limit = static_egress_limits[host_clean]
+
+                            if not limit then
+                              -- Check wildcard
+                              for pattern, bytes in pairs(static_egress_limits) do
+                                if string.sub(pattern, 1, 2) == "*." then
+                                  local suffix = string.sub(pattern, 2)
+                                  if string.sub(host_clean, -string.len(suffix)) == suffix then
+                                    limit = bytes
+                                    break
+                                  end
+                                end
+                              end
+                            end
+
+                            -- Use default
+                            if not limit then
+                              limit = static_egress_limits["default"] or DEFAULT_EGRESS_LIMIT
+                            end
+                          end
+
+                          -- Cache the result
+                          egress_limit_cache[host_clean] = {
+                            bytes_per_hour = limit,
+                            expires_at = os.time() + CACHE_TTL_SECONDS
+                          }
+
+                          return limit
                         end
 
                         -- Check egress volume limit (returns allowed, current_bytes, limit)

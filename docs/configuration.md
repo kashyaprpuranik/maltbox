@@ -197,6 +197,17 @@ curl -X POST http://localhost:8002/api/v1/rate-limits \
     "description": "Higher limit for prod-agent",
     "agent_id": "prod-agent"
   }'
+
+# Agent-specific egress limit
+curl -X POST http://localhost:8002/api/v1/egress-limits \
+  -H "Authorization: Bearer admin-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "domain_pattern": "api.openai.com",
+    "bytes_per_hour": 52428800,
+    "description": "50MB/hour for prod-agent",
+    "agent_id": "prod-agent"
+  }'
 ```
 
 ### Agent token scoping
@@ -216,3 +227,67 @@ curl -X POST http://localhost:8002/api/v1/tokens \
 curl http://localhost:8002/api/v1/secrets/for-domain?domain=api.example.com \
   -H "Authorization: Bearer <prod-agent-token>"
 ```
+
+## Egress Limits
+
+Egress limits control the amount of data (bytes per hour) that can be sent to each domain. This helps prevent data exfiltration and runaway costs.
+
+**Limitation**: Byte counts are tracked in-memory by Envoy and reset when Envoy restarts. See the roadmap for persistent state support.
+
+### Standalone Mode
+
+Configure via environment variable:
+```bash
+# Format: domain:bytes_per_hour (comma-separated)
+STATIC_EGRESS_LIMITS="api.openai.com:10485760,default:104857600"  # 10MB for OpenAI, 100MB default
+```
+
+### Connected Mode (Control Plane)
+
+```bash
+# List all egress limits
+curl http://localhost:8002/api/v1/egress-limits \
+  -H "Authorization: Bearer admin-token"
+
+# Create egress limit (global)
+curl -X POST http://localhost:8002/api/v1/egress-limits \
+  -H "Authorization: Bearer admin-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "domain_pattern": "api.openai.com",
+    "bytes_per_hour": 10485760,
+    "description": "10MB/hour for OpenAI"
+  }'
+
+# Create agent-specific egress limit
+curl -X POST http://localhost:8002/api/v1/egress-limits \
+  -H "Authorization: Bearer admin-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "domain_pattern": "*.github.com",
+    "bytes_per_hour": 52428800,
+    "description": "50MB/hour for GitHub",
+    "agent_id": "prod-agent"
+  }'
+
+# Update egress limit
+curl -X PUT http://localhost:8002/api/v1/egress-limits/1 \
+  -H "Authorization: Bearer admin-token" \
+  -H "Content-Type: application/json" \
+  -d '{"bytes_per_hour": 20971520}'
+
+# Delete egress limit
+curl -X DELETE http://localhost:8002/api/v1/egress-limits/1 \
+  -H "Authorization: Bearer admin-token"
+```
+
+### Common byte values
+
+| Size | Bytes |
+|------|-------|
+| 1 MB | 1048576 |
+| 10 MB | 10485760 |
+| 50 MB | 52428800 |
+| 100 MB | 104857600 |
+| 500 MB | 524288000 |
+| 1 GB | 1073741824 |

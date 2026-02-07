@@ -24,7 +24,44 @@ Maltbox assumes the AI agent is **untrusted by default**. The agent may be:
 | **Overly capable** | Has access to credentials/APIs it shouldn't, even if behaving correctly |
 | **Unpredictable** | Makes unexpected network requests due to hallucination or bugs |
 
-**Not in scope**: Maltbox does not protect against attacks from the host machine, malicious administrators, or physical access. It assumes the control plane and infrastructure operators are trusted.
+### Trust Boundaries
+
+Maltbox has layered trust boundaries with different levels of protection:
+
+| Boundary | Trusted | Defended Against | Current Controls |
+|----------|---------|------------------|------------------|
+| **Infrastructure operators** | Yes | - | None (full access assumed) |
+| **Super admins** | Yes | - | None (can access all tenants) |
+| **Tenant admins** | Partially | Other tenants, unauthorized access | Tenant isolation, API tokens, IP ACLs |
+| **Developers** | Partially | Privileged operations | Role-based access (read-only dashboard) |
+| **Agent tokens** | No | Cross-agent access, CP modification | Scoped to agent, read-only for config |
+| **AI agents** | No | All threats listed above | Network isolation, credential hiding, allowlists |
+
+**What current controls provide:**
+- **Multi-tenancy isolation**: Tenant A cannot access Tenant B's secrets, agents, or configuration
+- **Credential theft resistance**: Compromised admin token from one tenant cannot access others
+- **Network-based restrictions**: IP ACLs limit where admin operations can originate
+- **Least-privilege agents**: Agent tokens can only read their own configuration, not modify it
+
+**What is NOT currently defended:**
+- Malicious or compromised super admins (full platform access)
+- Infrastructure-level attacks (host compromise, container escape, supply chain)
+- Physical access to control plane servers
+- Insider threats from infrastructure operators
+
+### Production Hardening (Recommended)
+
+For production deployments handling sensitive workloads, consider:
+
+| Enhancement | Purpose | Implementation |
+|-------------|---------|----------------|
+| **API Gateway + WAF** | Rate limiting, bot protection, OWASP rules | Kong, AWS API Gateway, Cloudflare |
+| **Mandatory MFA** | Protect admin accounts from credential theft | OIDC provider (Okta, Auth0, Keycloak) |
+| **Audit logging** | Detect suspicious admin activity | Ship to SIEM, alert on anomalies |
+| **Secret rotation** | Limit blast radius of compromised credentials | Vault integration, short-lived tokens |
+| **mTLS** | Authenticate data plane ↔ control plane | step-ca, SPIFFE/SPIRE |
+| **Network segmentation** | Isolate control plane from public internet | VPC, private endpoints, bastion |
+| **Immutable infrastructure** | Prevent persistent compromise | Read-only containers, signed images |
 
 ## Security Principles
 
@@ -42,9 +79,8 @@ Maltbox assumes the AI agent is **untrusted by default**. The agent may be:
 ### Container Security
 | Control | Implementation |
 |---------|----------------|
-| Read-only filesystem | `read_only: true` on agent container |
 | No privilege escalation | `no-new-privileges` security option |
-| Dropped capabilities | All capabilities dropped |
+| Seccomp profile | Blocks raw sockets (prevents packet-crafting bypass) |
 | Resource limits | CPU, memory, PID limits enforced |
 | Forced proxy | `HTTP_PROXY`/`HTTPS_PROXY` environment variables |
 | Forced DNS | Container DNS set to CoreDNS filter IP |
@@ -52,11 +88,26 @@ Maltbox assumes the AI agent is **untrusted by default**. The agent may be:
 ### Network Security
 | Control | Implementation |
 |---------|----------------|
-| Internal network | `agent-net` marked as `internal: true` |
+| Internal network | `agent-net` marked as `internal: true` (no default gateway) |
+| Protocol restriction | Agent can ONLY reach Envoy (HTTP) and CoreDNS (DNS) |
 | IPv6 disabled | Prevents bypass of IPv4 egress controls |
 | Allowlist enforcement | CoreDNS blocks resolution of non-allowed domains |
 | Egress proxy | All HTTP(S) routed through Envoy |
 | Egress volume limits | Per-domain byte budgets (in-memory, see note) |
+| iptables fallback | Explicit DROP rules if proxy crashes (see below) |
+| Raw socket blocked | Seccomp profile prevents packet crafting |
+
+**Protocol Smuggling Prevention**: Raw TCP/UDP to external hosts is impossible. The agent can only reach two IPs on the internal network: Envoy (port 8443, HTTP only) and CoreDNS (port 53, DNS only). The iptables script DROPs all other traffic. Seccomp blocks raw socket creation (AF_PACKET), preventing packet crafting.
+
+**Residual Exfiltration Channels**: Small amounts of data could theoretically be exfiltrated via DNS queries or HTTPS traffic to allowlisted domains. Mitigations: DNS tunneling detection (blocks long subdomains), egress volume limits, and audit logging.
+
+**Defense in Depth**: Network isolation doesn't depend solely on Envoy/CoreDNS being healthy. The `internal: true` network flag removes the default gateway at the Docker level. For additional hardening, run the iptables script:
+
+```bash
+sudo ./data-plane/scripts/network-hardening.sh
+```
+
+This adds explicit iptables rules that DROP all traffic from the agent container except to Envoy (8443) and CoreDNS (53). Even if both services crash, the agent cannot reach the internet.
 
 **Egress Volume Limits**: Prevents large-scale data exfiltration by tracking bytes sent per domain per hour. Configure via `STATIC_EGRESS_LIMITS` environment variable:
 ```bash
@@ -65,12 +116,16 @@ STATIC_EGRESS_LIMITS="api.openai.com:10485760,default:104857600"  # 10MB for Ope
 ```
 **Limitation**: Byte counts are in-memory and reset when Envoy restarts. See roadmap for persistent state.
 
-### Kernel Isolation (Production)
+### Kernel Isolation (Default)
 
-For high-security deployments, enable [gVisor](https://gvisor.dev) to intercept syscalls in user-space:
+The `standard` profile uses [gVisor](https://gvisor.dev) to intercept syscalls in user-space. This is the recommended default for production:
 
 ```bash
-docker-compose --profile secure --profile admin up -d
+# Requires gVisor installation: https://gvisor.dev/docs/user_guide/install/
+docker-compose --profile standard --profile admin up -d
+
+# Use --profile dev if gVisor is not installed (development only)
+docker-compose --profile dev --profile admin up -d
 ```
 
 | Control | Implementation |
@@ -116,7 +171,12 @@ Lightweight setup with just 3 containers. Edit `coredns/Corefile` and `envoy/env
 
 ```bash
 cd data-plane
+
+# Recommended: with gVisor (requires installation: https://gvisor.dev/docs/user_guide/install/)
 docker-compose --profile standard up -d
+
+# Development: without gVisor (if not installed)
+docker-compose --profile dev up -d
 ```
 
 #### Locally Managed (With Admin UI)
@@ -151,10 +211,12 @@ Adds agent-manager (watches `maltbox.yaml`) and local admin UI for browser-based
 
 ```bash
 cd data-plane
+
+# Recommended: with gVisor (requires installation)
 docker-compose --profile standard --profile admin up -d
 
-# With gVisor isolation (requires gVisor installed)
-docker-compose --profile secure --profile admin up -d
+# Development: without gVisor
+docker-compose --profile dev --profile admin up -d
 ```
 
 **Local Admin UI** (http://localhost:8080):
@@ -264,6 +326,12 @@ docker-compose --profile auditing up -d
 The web terminal is the easiest - just open the Admin UI and click Terminal.
 
 For SSH access in Control Plane Mode (remote data planes):
+```bash
+cd data-plane
+./scripts/setup-ssh-tunnel.sh --control-plane http://<cp-ip>:8002 --token admin-token
+```
+
+Or manually:
 1. Generate STCP secret: `curl -X POST http://localhost:8002/api/v1/agents/my-agent/stcp-secret -H "Authorization: Bearer admin-token"`
 2. Add to `data-plane/.env`: `STCP_SECRET_KEY=<secret>`, `FRP_SERVER_ADDR=<control-plane-ip>`
 3. Start with SSH profile: `docker-compose --profile standard --profile ssh up -d`

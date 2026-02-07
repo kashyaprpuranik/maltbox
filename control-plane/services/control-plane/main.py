@@ -140,6 +140,21 @@ class RateLimit(Base):
     agent_id = Column(String(100), nullable=True, index=True)
 
 
+class EgressLimit(Base):
+    """Per-domain egress volume limits (bytes per hour)."""
+    __tablename__ = "egress_limits"
+
+    id = Column(Integer, primary_key=True, index=True)
+    domain_pattern = Column(String(200), index=True)  # e.g., "api.openai.com", "*.github.com"
+    bytes_per_hour = Column(Integer, default=104857600)  # 100MB default
+    description = Column(String(500))
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Per-agent scoping: NULL = global (applies to all agents)
+    agent_id = Column(String(100), nullable=True, index=True)
+
+
 class AgentState(Base):
     """Stores agent status (from heartbeats) and pending commands."""
     __tablename__ = "agent_state"
@@ -412,6 +427,34 @@ class RateLimitResponse(BaseModel):
     domain_pattern: str
     requests_per_minute: int
     burst_size: int
+    description: Optional[str]
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+    agent_id: Optional[str] = None  # NULL = global
+
+    class Config:
+        from_attributes = True
+
+
+# Egress limit Pydantic models
+class EgressLimitCreate(BaseModel):
+    domain_pattern: str  # e.g., "api.openai.com", "*.github.com"
+    bytes_per_hour: int = 104857600  # 100MB default
+    description: Optional[str] = None
+    agent_id: Optional[str] = None  # NULL = global (applies to all agents)
+
+
+class EgressLimitUpdate(BaseModel):
+    bytes_per_hour: Optional[int] = None
+    description: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+class EgressLimitResponse(BaseModel):
+    id: int
+    domain_pattern: str
+    bytes_per_hour: int
     description: Optional[str]
     enabled: bool
     created_at: datetime
@@ -1734,6 +1777,138 @@ async def get_rate_limit_for_domain(
         "domain": domain,
         "requests_per_minute": default_rpm,
         "burst_size": default_burst
+    }
+
+
+# =============================================================================
+# Egress Limits - Per-domain byte limits
+# =============================================================================
+
+@app.get("/api/v1/egress-limits", response_model=List[EgressLimitResponse])
+async def get_egress_limits(
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin_role),
+    agent_id: Optional[str] = None
+):
+    """Get all egress limits. Optionally filter by agent_id."""
+    query = db.query(EgressLimit)
+    if agent_id:
+        query = query.filter(
+            (EgressLimit.agent_id == agent_id) | (EgressLimit.agent_id.is_(None))
+        )
+    return query.order_by(EgressLimit.domain_pattern).all()
+
+
+@app.post("/api/v1/egress-limits", response_model=EgressLimitResponse)
+async def create_egress_limit(
+    request: Request,
+    egress_limit: EgressLimitCreate,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
+):
+    """Create a new egress limit."""
+    # Check if pattern already exists for this agent scope
+    existing = db.query(EgressLimit).filter(
+        EgressLimit.domain_pattern == egress_limit.domain_pattern,
+        EgressLimit.agent_id == egress_limit.agent_id
+    ).first()
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Egress limit for pattern '{egress_limit.domain_pattern}' already exists"
+        )
+
+    db_egress_limit = EgressLimit(
+        domain_pattern=egress_limit.domain_pattern,
+        bytes_per_hour=egress_limit.bytes_per_hour,
+        description=egress_limit.description,
+        agent_id=egress_limit.agent_id
+    )
+    db.add(db_egress_limit)
+    db.commit()
+    db.refresh(db_egress_limit)
+    return db_egress_limit
+
+
+@app.put("/api/v1/egress-limits/{egress_limit_id}", response_model=EgressLimitResponse)
+async def update_egress_limit(
+    request: Request,
+    egress_limit_id: int,
+    egress_limit: EgressLimitUpdate,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
+):
+    """Update an egress limit."""
+    db_egress_limit = db.query(EgressLimit).filter(EgressLimit.id == egress_limit_id).first()
+    if not db_egress_limit:
+        raise HTTPException(status_code=404, detail="Egress limit not found")
+
+    update_data = egress_limit.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_egress_limit, key, value)
+
+    db.commit()
+    db.refresh(db_egress_limit)
+    return db_egress_limit
+
+
+@app.delete("/api/v1/egress-limits/{egress_limit_id}")
+async def delete_egress_limit(
+    request: Request,
+    egress_limit_id: int,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
+):
+    """Delete an egress limit."""
+    db_egress_limit = db.query(EgressLimit).filter(EgressLimit.id == egress_limit_id).first()
+    if not db_egress_limit:
+        raise HTTPException(status_code=404, detail="Egress limit not found")
+
+    db.delete(db_egress_limit)
+    db.commit()
+    return {"deleted": True, "id": egress_limit_id}
+
+
+@app.get("/api/v1/egress-limits/for-domain")
+@limiter.limit("120/minute")  # Envoy calls this frequently (cached 5min client-side)
+async def get_egress_limit_for_domain(
+    request: Request,
+    domain: str,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(verify_token)
+):
+    """Get egress limit for a domain (used by Envoy Lua filter - admin or agent).
+
+    Agent tokens receive egress limits scoped to their agent + global egress limits.
+    Agent-specific egress limits take precedence over global egress limits.
+    """
+    query = db.query(EgressLimit).filter(EgressLimit.enabled == True)
+
+    # Agent tokens only see their agent's egress limits + global egress limits
+    if token_info.token_type == "agent" and token_info.agent_id:
+        query = query.filter(
+            (EgressLimit.agent_id == token_info.agent_id) | (EgressLimit.agent_id.is_(None))
+        )
+
+    egress_limits = query.all()
+
+    # Sort so agent-specific egress limits come first (take precedence)
+    egress_limits.sort(key=lambda el: (el.agent_id is None, el.id))
+
+    for el in egress_limits:
+        if match_domain(el.domain_pattern, domain):
+            return {
+                "matched": True,
+                "domain_pattern": el.domain_pattern,
+                "bytes_per_hour": el.bytes_per_hour
+            }
+
+    # Return default egress limit if no specific match
+    default_bytes = int(os.environ.get('DEFAULT_EGRESS_LIMIT_BYTES', '104857600'))  # 100MB
+    return {
+        "matched": False,
+        "domain": domain,
+        "bytes_per_hour": default_bytes
     }
 
 

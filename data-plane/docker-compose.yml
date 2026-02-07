@@ -7,11 +7,12 @@
 #   connected:  Use control plane API, fall back to static config
 #
 # Usage:
-#   Standard mode (default):
+#   Standard mode (gVisor - RECOMMENDED for production):
 #     docker-compose --profile standard up -d
+#     Requires gVisor: https://gvisor.dev/docs/user_guide/install/
 #
-#   Secure mode (gVisor - requires installation):
-#     docker-compose --profile secure up -d
+#   Development mode (no gVisor - for local dev or if gVisor unavailable):
+#     docker-compose --profile dev up -d
 #
 #   With local admin UI:
 #     docker-compose --profile standard --profile admin up -d
@@ -22,9 +23,6 @@
 #
 #   With SSH tunnel:
 #     docker-compose --profile standard --profile ssh up -d
-#
-#   Secure mode with admin UI:
-#     docker-compose --profile secure --profile admin up -d
 #
 # Network Architecture:
 #   agent-net (isolated, internal)
@@ -45,10 +43,11 @@ version: '3.8'
 
 services:
   # ===========================================================================
-  # Agent Container (isolated - can only reach envoy and dns-filter)
-  # Use standard profile (default) or secure profile (gVisor)
+  # Agent Container (DEVELOPMENT - runc runtime, no gVisor)
+  # Use when gVisor is not installed or for local development
+  # For production, use --profile standard (gVisor) instead
   # ===========================================================================
-  agent:
+  agent-dev:
     build:
       context: .
       dockerfile: agent.Dockerfile
@@ -57,15 +56,16 @@ services:
     image: agent:${AGENT_VARIANT:-lean}
     container_name: agent
     profiles:
-      - standard
+      - dev
 
-    # Container runtime: "runc" (default) or "runsc" (gVisor)
-    # For gVisor, use --profile secure instead
-    runtime: ${CONTAINER_RUNTIME:-runc}
+    # Standard container runtime (no gVisor)
+    runtime: runc
 
-    # Security hardening (relaxed for SSH - runs as root to start sshd, then drops to user)
+    # Security hardening
     security_opt:
       - no-new-privileges:true
+      # Block raw sockets to prevent proxy bypass via packet crafting
+      - seccomp:./configs/seccomp/agent-profile.json
 
     # Resource limits
     deploy:
@@ -120,11 +120,11 @@ services:
     restart: unless-stopped
 
   # ===========================================================================
-  # Agent Container (SECURE - gVisor isolation, stricter limits)
-  # Use with: docker-compose --profile secure up -d
+  # Agent Container (STANDARD - gVisor isolation, recommended for production)
   # Requires gVisor: https://gvisor.dev/docs/user_guide/install/
+  # Use --profile dev if gVisor is not installed
   # ===========================================================================
-  agent-secure:
+  agent:
     build:
       context: .
       dockerfile: agent.Dockerfile
@@ -133,7 +133,7 @@ services:
     image: agent:${AGENT_VARIANT:-lean}
     container_name: agent
     profiles:
-      - secure
+      - standard
 
     # gVisor runtime - syscalls intercepted in user-space
     runtime: runsc
